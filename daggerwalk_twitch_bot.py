@@ -40,21 +40,38 @@ class Config:
     VOTING_DURATION = 30  # seconds
     AUTHORIZED_USERS = ["billcrystals", "daggerwalk", "daggerwalk_bot"]
     MAX_INPUT_REPEATS = 100
+    DJANGO_LOG_URL = 'http://localhost:8000/daggerwalk/log/'
     
     ACTIVE_MODS = [
         "World of Daggerfall", "Distant Terrain", "Interesting Eroded Terrains",
         "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass"
     ]
+
+    _params = None
+
+    @classmethod
+    def load_params(cls):
+        """Load API keys and credentials from parameters file (only once)"""
+        if cls._params is None:  # Load only if not already loaded
+            if not os.path.exists(cls.PARAMS_FILE):
+                logging.error(f"Missing {cls.PARAMS_FILE}")
+                exit(1)
+            with open(cls.PARAMS_FILE, "r") as file:
+                cls._params = json.load(file)
+        
+        return cls._params
     
     @classmethod
-    def load_oauth(cls):
-        """Load OAuth credentials from parameters file"""
-        if not os.path.exists(cls.PARAMS_FILE):
-            logging.error(f"Missing {cls.PARAMS_FILE}")
-            exit(1)
-        with open(cls.PARAMS_FILE, "r") as file:
-            params = json.load(file)
+    def get_oauth(cls):
+        """Return Twitch OAuth credentials"""
+        params = cls.load_params()
         return params.get("CLIENT_ID", ""), params.get("OAUTH_TOKEN", "")
+
+    @classmethod
+    def get_api_key(cls):
+        """Return Daggerwalk API key"""
+        params = cls.load_params()
+        return params.get("daggerwalk_api_key", "")
 
 def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
     """Send keyboard input to Daggerfall Unity window"""
@@ -76,11 +93,10 @@ def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
     except Exception as e:
         logging.error(f"Input error: {e}")
 
-
-DJANGO_LOG_URL = 'http://localhost:8000/daggerwalk/log/'
-
 def post_to_django(data, reset=False):
     """Post game state data to Django endpoint in background"""
+    API_KEY = Config.get_api_key()
+
     try:
         payload = {
             "worldX": int(data.get('worldX', 0)),
@@ -100,11 +116,16 @@ def post_to_django(data, reset=False):
             "reset": reset
         }
 
-        logging.info(f"Posting to Django: {DJANGO_LOG_URL}")
+        logging.info(f"Posting to Django: {Config.DJANGO_LOG_URL}")
+
+        headers = {
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json"
+        }
         response = requests.post(
-            DJANGO_LOG_URL,
+            Config.DJANGO_LOG_URL,
             json=payload,
-            headers={'Content-Type': 'application/json'},
+            headers=headers,
             timeout=5
         )
         
@@ -114,15 +135,15 @@ def post_to_django(data, reset=False):
             logging.warning(f"Django post returned non-201 status: {response.status_code}. Response: {response.text}")
 
     except requests.Timeout:
-        logging.error(f"Timeout posting to Django after 5s: {DJANGO_LOG_URL}")
+        logging.error(f"Timeout posting to Django after 5s: {Config.DJANGO_LOG_URL}")
     except requests.ConnectionError:
-        logging.error(f"Connection error posting to Django: {DJANGO_LOG_URL}")
+        logging.error(f"Connection error posting to Django: {Config.DJANGO_LOG_URL}")
     except Exception as e:
         logging.error(f"Error posting to Django: {str(e)}")
 
 class DaggerfallBot(commands.Bot):
     def __init__(self):
-        _, oauth = Config.load_oauth()
+        client_id, oauth = Config.get_oauth()
         super().__init__(token=oauth, prefix="!", initial_channels=[Config.TWITCH_CHANNEL])
         
         self.last_autosave = datetime.now(timezone.utc)
