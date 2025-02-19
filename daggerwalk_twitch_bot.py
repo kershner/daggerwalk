@@ -40,7 +40,7 @@ class Config:
     VOTING_DURATION = 30  # seconds
     AUTHORIZED_USERS = ["billcrystals", "daggerwalk", "daggerwalk_bot"]
     MAX_INPUT_REPEATS = 100
-    DJANGO_LOG_URL = 'http://localhost:8000/daggerwalk/log/'
+    DJANGO_LOG_URL = 'https://www.kershner.org/daggerwalk/log/'
     
     ACTIVE_MODS = [
         "World of Daggerfall", "Distant Terrain", "Interesting Eroded Terrains",
@@ -449,11 +449,12 @@ class DaggerfallBot(commands.Bot):
             music_info = f"🎵 {current_song} (Track {track_id})" if current_song else ""
 
             # Build status message efficiently
+            map_link = f"🗺️ Map: https://kershner.org/daggerwalk?region={data['region']}"
             status = " • ".join(filter(None, [
-                f"🗺️ {data['region']}", f"📍 {data['location']}", f"📅 {date}",
-                f"{season_emoji} {season}", f"{weather_emoji} {data['weather']}", music_info
+                f"🌍 {data['region']}", f"📍 {data['location']}", f"📅 {date}",
+                f"{season_emoji} {season}", f"{weather_emoji} {data['weather']}", music_info, map_link
             ]))
-
+            
             # Async API request
             post_to_django(data)
 
