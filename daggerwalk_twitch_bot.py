@@ -449,7 +449,7 @@ class DaggerfallBot(commands.Bot):
             music_info = f"🎵 {current_song} (Track {track_id})" if current_song else ""
 
             # Build status message efficiently
-            map_link = f"🗺️ Map: https://kershner.org/daggerwalk?region={data['region']}"
+            map_link = f"🗺️ Map: https://kershner.org/daggerwalk?region={data['region'].replace(' ', '+')}"
             status = " • ".join(filter(None, [
                 f"🌍 {data['region']}", f"📍 {data['location']}", f"📅 {date}",
                 f"{season_emoji} {season}", f"{weather_emoji} {data['weather']}", music_info, map_link
@@ -468,23 +468,19 @@ class DaggerfallBot(commands.Bot):
         except Exception as e:
             logging.error(f"Info error: {e}")
 
-
     async def help(self):
         """Display available commands"""
         logging.info("Executing help command")
         channel = self.connected_channels[0]
-        messages = [
-            "⊰⟦💀Daggerwalk🌲⟧⊱",
-            "An automated journey across the Iliac Bay. Available commands:",
-            ("!walk • !stop • !jump • !esc • !left [num] • "
-            "!right [num] • !up [num] • !down [num] • !forward [num] • "
-            "!back [num] • !map • !modlist • !song • !reset")
-        ]
         
-        await asyncio.sleep(Config.CHAT_DELAY)
-        for msg in messages:
-            await channel.send(msg)
-            await asyncio.sleep(Config.CHAT_DELAY)
+        combined_message = (
+            "💀🌲Daggerwalk Commands: "
+            "!walk • !stop • !jump • !esc • !left [num] • "
+            "!right [num] • !up [num] • !down [num] • !forward [num] • "
+            "!back [num] • !map • !modlist • !song • !reset"
+        )
+        
+        await channel.send(combined_message)
 
     async def modlist(self):
         """Display active mods"""
