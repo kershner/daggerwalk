@@ -102,6 +102,12 @@ def start_daggerfall():
         pyautogui.press("enter")  # Press Enter to confirm
         time.sleep(1)
 
+        logging.info("Setting timescale...")
+        pyautogui.write("set_timescale 72")
+        time.sleep(1)
+        pyautogui.press("enter")  # Press Enter to confirm
+        time.sleep(1)
+
         logging.info("Starting song shuffle...")
         pyautogui.write("song shuffle")
         time.sleep(1)
