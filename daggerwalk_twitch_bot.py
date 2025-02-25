@@ -43,7 +43,7 @@ class Config:
     DJANGO_LOG_URL = 'https://www.kershner.org/daggerwalk/log/'
     
     ACTIVE_MODS = [
-        "World of Daggerfall", "Distant Terrain", "Interesting Eroded Terrains",
+        "World of Daggerfall", "Interesting Eroded Terrains",
         "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass"
     ]
 

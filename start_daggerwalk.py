@@ -19,10 +19,10 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(console_handler)
 
-DAGGERFALL_EXE = r"c:\DaggerfalUnity\1.1.1\DaggerfallUnity.exe"
-OBS_EXE = r"c:\OBS\bin\64bit\obs64.exe"
+DAGGERFALL_EXE = r"C:\Daggerwalk\DaggerfallUnity\DaggerfallUnity.exe"
+OBS_EXE = r"C:\Program Files\obs-studio\bin\64bit\obs64.exe"
 VIRTUAL_AUDIO_DEVICE = "VB-Audio Virtual Cable"
-SOUNDVOLUMEVIEW_PATH = r"C:\Daggerwalk\SoundVolumeView\SoundVolumeView.exe"
+SOUNDVOLUMEVIEW_PATH = r"C:\Daggerwalk\Utilities\SoundVolumeView\SoundVolumeView.exe"
 
 # Function to check if a process is running
 def is_process_running(process_name):
@@ -79,8 +79,7 @@ def start_daggerfall():
 
         logging.info("Loading last save...")
         pyautogui.press("enter")  # Press Enter to load the save
-        time.sleep(10)  # Wait for the save to load
-
+        time.sleep(20)  # Wait for the save to load
         
         pyautogui.press("`")  # Open the console (tilde key)
         
@@ -145,11 +144,13 @@ def start_obs():
 
         # Launch OBS with --multi to avoid instance conflicts
         subprocess.Popen(
-            ["cmd.exe", "/c", f"start /min {OBS_EXE} --startstreaming --multi"],
-            cwd=obs_directory,
+            [OBS_EXE, "--startstreaming", "--multi"],
+            cwd=os.path.dirname(OBS_EXE),  # Ensure correct working directory
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            shell=False  # Avoids command shell issues
         )
+
         
         time.sleep(5)  # Give OBS time to start
 
