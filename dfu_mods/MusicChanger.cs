@@ -17,10 +17,12 @@ public class MusicChanger : MonoBehaviour
     private static bool shuffleMode = false;
     private static int currentSongPlayCount = 0;
     private static int shuffleRepeatsPerSong = 5;
-    
-    // Timer related variables
-    private static float inactivityTimer = 0f;
-    private static float inactivityThreshold = 600f; // 10 minutes
+    private static float lastSongStartTime = 0f;
+    private static bool isSilenceTrack = false;
+    private static float silenceDuration = 60f; // 1 minute of silence
+    private static float silenceTimer = 0f;
+    private static int songsSinceLastSilence = 0;
+    private static int songsBeforeSilence = 3; // Play silence after every X songs in shuffle mode
 
     [Invoke(StateManager.StateTypes.Start, 0)]
     public static void Init(InitParams initParams)
@@ -68,60 +70,113 @@ public class MusicChanger : MonoBehaviour
                     Debug.Log("MusicChanger: Detected game music change, clearing custom song");
                     currentSong = null;
                     shuffleMode = false;
-                    ResetInactivityTimer();
                     return;
                 }
 
-                // Check if song has stopped
-                if (!songPlayer.IsPlaying)
+                // Handle silence track (None) differently with a timer
+                if (isSilenceTrack)
                 {
-                    if (shuffleMode)
+                    silenceTimer += Time.deltaTime;
+                    
+                    // When the silence duration is reached, consider it "stopped playing"
+                    if (silenceTimer >= silenceDuration)
                     {
-                        currentSongPlayCount++;
+                        Debug.Log($"MusicChanger: Silence period completed after {silenceTimer:F2} seconds");
+                        silenceTimer = 0f;
                         
-                        // Only pick a new song if we've played the current one enough times
-                        if (currentSongPlayCount >= shuffleRepeatsPerSong)
+                        if (shuffleMode)
                         {
-                            // Pick a new random song
-                            Array songValues = Enum.GetValues(typeof(SongFiles));
-                            int newTrack;
-                            do
-                            {
-                                newTrack = (int)songValues.GetValue(random.Next(songValues.Length));
-                            } while (newTrack == (int)currentSong && songValues.Length > 1); // Avoid same song if possible
-                            
-                            currentSong = (SongFiles)newTrack;
-                            currentSongPlayCount = 0; // Reset counter for new song
-                            Debug.Log($"MusicChanger: Shuffle mode - Playing new random track {currentSong.Value}");
+                            HandleSongCompletion(songPlayer);
                         }
                         else
                         {
-                            Debug.Log($"MusicChanger: Shuffle mode - Replaying current track (play {currentSongPlayCount + 1} of {shuffleRepeatsPerSong})");
+                            // For non-shuffle mode, restart the silence period
+                            lastSongStartTime = Time.time;
                         }
                     }
-                    
-                    songPlayer.Song = currentSong.Value;
-                    songPlayer.Play(currentSong.Value);
                 }
-
-                // Update inactivity timer - only if not in shuffle mode
-                if (!shuffleMode)
+                // For normal tracks, check if song has stopped
+                else if (!songPlayer.IsPlaying)
                 {
-                    inactivityTimer += Time.deltaTime;
-                    if (inactivityTimer >= inactivityThreshold)
+                    // Log more detailed debug info including the current track and its enum value
+                    Debug.Log($"MusicChanger: Song stopped playing. Current song: {currentSong.Value} (ID: {(int)currentSong.Value})");
+                    float playDuration = Time.time - lastSongStartTime;
+                    Debug.Log($"MusicChanger: Song played for {playDuration:F2} seconds before stopping");
+                    
+                    if (shuffleMode)
                     {
-                        Debug.Log("MusicChanger: Inactivity threshold reached, resuming default music");
-                        ResumeDefaultMusicSystem();
-                        ResetInactivityTimer();
+                        HandleSongCompletion(songPlayer);
+                    }
+                    else
+                    {
+                        // For non-shuffle mode, just replay the current song
+                        songPlayer.Song = currentSong.Value;
+                        songPlayer.Play(currentSong.Value);
+                        lastSongStartTime = Time.time;
                     }
                 }
             }
         }
     }
-
-    private static void ResetInactivityTimer()
+    
+    private void HandleSongCompletion(DaggerfallSongPlayer songPlayer)
     {
-        inactivityTimer = 0f;
+        currentSongPlayCount++;
+        
+        // Only pick a new song if we've played the current one enough times
+        if (currentSongPlayCount >= shuffleRepeatsPerSong)
+        {
+            // If we're not currently in silence and we've played enough songs
+            // since the last silence period, insert a silence period
+            if (!isSilenceTrack && shuffleMode && songsSinceLastSilence >= songsBeforeSilence)
+            {
+                Debug.Log($"MusicChanger: Shuffle mode - Inserting silence period after {songsSinceLastSilence} songs");
+                SetupNewSong(SongFiles.song_none);
+                songsSinceLastSilence = 0;
+                return;
+            }
+            
+            // Pick a new random song
+            Array songValues = Enum.GetValues(typeof(SongFiles));
+            int newTrack;
+            do
+            {
+                newTrack = (int)songValues.GetValue(random.Next(songValues.Length));
+            } while (newTrack == (int)currentSong && songValues.Length > 1); // Avoid same song if possible
+            
+            // Only increment songs since last silence when we're playing a real song (not silence)
+            if (!isSilenceTrack && (int)((SongFiles)newTrack) != -1)
+            {
+                songsSinceLastSilence++;
+            }
+            else if ((int)((SongFiles)newTrack) == -1)
+            {
+                // Reset counter if we happen to randomly select silence
+                songsSinceLastSilence = 0;
+            }
+            
+            // Set up the selected song (handles both normal songs and silence)
+            SetupNewSong((SongFiles)newTrack);
+            Debug.Log($"MusicChanger: Shuffle mode - Playing new random track {currentSong.Value} (ID: {(int)currentSong.Value})");
+        }
+        else
+        {
+            Debug.Log($"MusicChanger: Shuffle mode - Replaying current track {currentSong.Value} (play {currentSongPlayCount + 1} of {shuffleRepeatsPerSong})");
+            
+            if (isSilenceTrack)
+            {
+                // Reset silence timer to start a new silence period
+                silenceTimer = 0f;
+                lastSongStartTime = Time.time;
+            }
+            else
+            {
+                // Replay normal song
+                songPlayer.Song = currentSong.Value;
+                songPlayer.Play(currentSong.Value);
+                lastSongStartTime = Time.time;
+            }
+        }
     }
 
     private static string ChangeMusic(string[] args)
@@ -136,7 +191,6 @@ public class MusicChanger : MonoBehaviour
         if (args[0].ToLower() == "default")
         {
             ResumeDefaultMusicSystem();
-            ResetInactivityTimer();
             return "MusicChanger: Resumed default music system.";
         }
 
@@ -145,6 +199,7 @@ public class MusicChanger : MonoBehaviour
         {
             shuffleMode = true;
             currentSongPlayCount = 0; // Reset counter when entering shuffle mode
+            songsSinceLastSilence = 0; // Reset silence counter when entering shuffle mode
             Array songValues = Enum.GetValues(typeof(SongFiles));
             int trackNumber = (int)songValues.GetValue(random.Next(songValues.Length));
             
@@ -177,8 +232,9 @@ public class MusicChanger : MonoBehaviour
             return $"MusicChanger: Track number {selectedTrack} is not valid.";
         }
 
-        // Set up the selected song
+        // Set up the selected song and reset play count
         SetupNewSong((SongFiles)selectedTrack);
+        currentSongPlayCount = 0; // Reset counter when manually selecting a track
         return $"MusicChanger: Now playing track {selectedTrack} ({(SongFiles)selectedTrack}).";
     }
 
@@ -206,17 +262,61 @@ public class MusicChanger : MonoBehaviour
 
         // Update both the current song and the player's Song property
         currentSong = songFile;
-        songPlayer.Song = songFile;
-        songPlayer.Play(songFile);
-
-        // Reset the inactivity timer when a new song is requested
-        ResetInactivityTimer();
+        
+        // Check specifically for the "None" track
+        if ((int)songFile == -1)
+        {
+            Debug.Log("MusicChanger: Starting 'None' track - treating as 1 minute of silence");
+            isSilenceTrack = true;
+            silenceTimer = 0f;
+            
+            // Try more aggressive methods to ensure silence
+            songPlayer.Stop();
+            
+            // Force silence by setting song to None and volume to 0
+            songPlayer.Song = SongFiles.song_none;
+            
+            // Try to access audio source to mute it directly
+            var audioSource = songPlayer.GetComponent<AudioSource>();
+            if (audioSource != null)
+            {
+                Debug.Log("MusicChanger: Setting AudioSource volume to 0 for silence");
+                audioSource.volume = 0f;
+            }
+            else
+            {
+                Debug.Log("MusicChanger: WARNING - Could not find AudioSource to mute");
+            }
+            
+            Debug.Log("MusicChanger: Stopped currently playing song for silence track");
+        }
+        else
+        {
+            isSilenceTrack = false;
+            songPlayer.Song = songFile;
+            Debug.Log($"MusicChanger: Setting up new song {songFile} (ID: {(int)songFile})");
+            
+            // If coming from silence, restore audio
+            var audioSource = songPlayer.GetComponent<AudioSource>();
+            if (audioSource != null)
+            {
+                audioSource.volume = 1.0f;
+                Debug.Log("MusicChanger: Restored AudioSource volume to 1.0");
+            }
+            
+            songPlayer.Play(songFile);
+        }
+        
+        // Record the time when we start playing a song
+        lastSongStartTime = Time.time;
+        
+        // Always reset the play count when setting up a new song
+        currentSongPlayCount = 0;
     }
 
     private static string ResumeDefaultMusic(string[] args)
     {
         ResumeDefaultMusicSystem();
-        ResetInactivityTimer();
         return "MusicChanger: Resumed default music system.";
     }
 
@@ -225,6 +325,8 @@ public class MusicChanger : MonoBehaviour
         currentSong = null;
         shuffleMode = false;
         currentSongPlayCount = 0;
+        isSilenceTrack = false;
+        songsSinceLastSilence = 0;
 
         if (originalSongManager != null)
         {
