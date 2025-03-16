@@ -90,8 +90,8 @@ def start_daggerfall():
         pyautogui.press("enter")  # Press Enter to confirm
         time.sleep(1)
 
-        logging.info("Setting jump to 75...")
-        pyautogui.write("set_jump 75")
+        logging.info("Setting jump to 50...")
+        pyautogui.write("set_jump 50")
         time.sleep(1)
         pyautogui.press("enter")  # Press Enter to confirm
         time.sleep(1)
@@ -102,14 +102,14 @@ def start_daggerfall():
         pyautogui.press("enter")  # Press Enter to confirm
         time.sleep(1)
 
-        logging.info("Setting timescale...")
-        pyautogui.write("set_timescale 72")
+        logging.info("Toggling air control...")
+        pyautogui.write("tac")
         time.sleep(1)
         pyautogui.press("enter")  # Press Enter to confirm
         time.sleep(1)
 
         logging.info("Starting song shuffle...")
-        pyautogui.write("song shuffle")
+        pyautogui.write("song shuffle all")
         time.sleep(1)
         pyautogui.press("enter")  # Press Enter to confirm
         time.sleep(1)

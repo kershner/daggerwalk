@@ -14,8 +14,6 @@ if %ERRORLEVEL% == 0 (
 set PYTHON_EXECUTABLE="%SCRIPT_DIR%\daggerwalk_venv\Scripts\python.exe"
 :: Run the Python script
 %PYTHON_EXECUTABLE% "%SCRIPT_DIR%\start_daggerwalk.py"
-:: Start the Twitch bot separately
-%PYTHON_EXECUTABLE% "%SCRIPT_DIR%\daggerwalk_twitch_bot.py"
 
 :end
 endlocal

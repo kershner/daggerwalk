@@ -6,3 +6,4 @@ Daggerfall Imaging 2/
 list_music_tracks.json
 parameters.json
 __pycache__/
+*.log
