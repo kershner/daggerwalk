@@ -262,17 +262,49 @@ class DaggerfallBot(commands.Bot):
 
     def validate_song_arg(self, args):
         """Validate song selection"""
+        songs_tab_link = "Song List: https://kershner.org/daggerwalk?tab=songs"
+        default_msg = f'Specify song number (-1 to 131), "category" or "random". {songs_tab_link}'
+        
         if not args:
-            return False, "Specify song number (1-131) or 'random'"
+            return False, default_msg
+                
         song = args[0].lower()
-        if song == "random" or (song.isdigit() and 1 <= int(song) <= 131):
+        
+        # Check for special string arguments first
+        if song == "category" or song == "random":
             return True, None
-        return False, "Invalid song. Use 1-131 or 'random'"
+                
+        # Then try to convert to integer
+        try:
+            song_num = int(song)
+            if -1 <= song_num <= 131:
+                return True, None
+            return False, default_msg
+        except ValueError:
+            # If it's not a valid string or convertible to int, it's invalid
+            return False, default_msg
 
     async def start_vote(self, message, vote_type):
         if self.voting_active:
             await message.channel.send("A vote is already in progress!")
             return
+
+        # Special handling for song category command
+        if vote_type == "song":
+            args = message.content.split()[1:] if len(message.content.split()) > 1 else []
+            if args and args[0].lower() == "category":
+                # If only "category" is provided without specific categories
+                if len(args) == 1:
+                    await message.channel.send("Choose categories for the song shuffle. Options: world, dungeon, misc, battle, all. Multiple categories supported. Ex: !song category world misc")
+                    return
+                # If they provided categories, proceed with vote for category shuffle
+                # The validation will be handled in execute_voted_command
+                pass
+            else:
+                # For regular song commands, validate as before
+                if not self.validate_song_arg(args)[0]:
+                    await message.channel.send(self.validate_song_arg(args)[1])
+                    return
 
         logging.info(f"Starting vote for {vote_type}")
         self.voting_active = True
@@ -328,19 +360,42 @@ class DaggerfallBot(commands.Bot):
             await self.reset()
         elif self.current_vote_type == "song":
             args = self.current_vote_message.content.split()[1:]
-            song_choice = args[0] if args else "random"
-            await self.song(song_choice)
+            
+            if args and args[0].lower() == "category":
+                # Handle category shuffle
+                categories = args[1:] if len(args) > 1 else ["all"]
+                await self.song_category(categories)
+            else:
+                # Handle regular song command
+                song_choice = args[0] if args else "random"
+                await self.song(song_choice)
 
     async def toggle_map(self):
-        """Toggle game map view"""
+        """Toggle game map view with special handling for Ocean regions"""
         logging.info("Executing map command")
-        send_game_input(GameKeys.MAP.value)  # Open map
-        time.sleep(3)
-        send_game_input("{ENTER}")  # Press ENTER
-        time.sleep(6)  # Wait 6 seconds
-        send_game_input(GameKeys.MAP.value)  # Press V
-        time.sleep(2)
-        send_game_input(GameKeys.MAP.value)  # Press V again
+        
+        # Get current map data to check region
+        map_data = await self.get_map_json_data()
+        current_region = map_data.get('region', '').strip()
+        
+        logging.info(f"Current region before map toggle: {current_region}")
+        
+        # Different behavior based on region
+        if current_region == "Ocean":
+            # No province to select for Ocean, so just open the map, wait a bit, and exit the map
+            logging.info("Ocean region detected - using alternate map sequence")
+            send_game_input(GameKeys.MAP.value)  # Open map
+            time.sleep(7)
+            send_game_input(GameKeys.MAP.value)  # Press V to exit
+        else:
+            # Original behavior for non-ocean regions
+            send_game_input(GameKeys.MAP.value)  # Open map
+            time.sleep(3)
+            send_game_input("{ENTER}")  # Press ENTER
+            time.sleep(6)  # Wait 6 seconds
+            send_game_input(GameKeys.MAP.value)  # Press V
+            time.sleep(2)
+            send_game_input(GameKeys.MAP.value)  # Press V again
 
     async def reset(self):
         """Reset to random location"""
@@ -359,12 +414,27 @@ class DaggerfallBot(commands.Bot):
     async def song(self, choice=None):
         """Change background music"""
         logging.info(f"Executing song command with choice: {choice}")
+        
         self.send_console_command(f"song {choice}")
         
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
         await channel.send('Song changed!')
+
+    async def song_category(self, categories):
+        """Change music to a random song from specified categories"""
+        categories_str = " ".join(categories)
+        logging.info(f"Executing song shuffle command with categories: {categories_str}")
+        
+        # Send the command to the game console
+        self.send_console_command(f"song shuffle {categories_str}")
+        
+        await asyncio.sleep(5)
+        
+        channel = self.connected_channels[0]
+        categories_str_display = ", ".join(categories)
+        await channel.send(f'Song shuffle categories changed to: {categories_str_display}!')
 
     async def killall(self):
         """Kill all enemies"""
@@ -427,10 +497,17 @@ class DaggerfallBot(commands.Bot):
             # Season lookup
             month = date_parts[1].strip().split(" ", 1)[-1]  # Extract month
             season = {
-                "Morning Star": "Winter", "Sun's Dusk": "Winter", "Evening Star": "Winter",
-                "First Seed": "Spring", "Rain's Hand": "Spring",
-                "Second Seed": "Summer", "Midyear": "Summer", "Sun's Height": "Summer",
-                "Last Seed": "Autumn", "Hearthfire": "Autumn", "Frostfall": "Autumn"
+                "Morning Star": "Winter", 
+                "Sun's Dawn": "Winter", 
+                "Evening Star": "Winter",
+                "First Seed": "Spring", 
+                "Rain's Hand": "Spring",
+                "Second Seed": "Summer", 
+                "Midyear": "Summer", 
+                "Last Seed": "Summer", 
+                "Hearthfire": "Autumn", 
+                "Sun's Dusk": "Autumn", 
+                "Frostfall": "Autumn"
             }.get(month, "Unknown")
 
             # Emoji mappings
