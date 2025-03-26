@@ -64,7 +64,7 @@ def start_daggerfall():
             DAGGERFALL_EXE,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        time.sleep(10)  # Wait for the game to start
+        time.sleep(20)  # Wait for the game to start
 
         logging.info("Changing Daggerfall Unity audio output device...")
         set_daggerfall_audio_device()
