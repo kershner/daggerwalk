@@ -190,9 +190,9 @@ def handle_obs_safe_mode_prompt():
             
             time.sleep(1)
 
-def start_twitch_bot():
+def start_bot_monitor():
     logging.info("Starting Twitch bot...")
-    subprocess.Popen([r"daggerwalk_venv\Scripts\python.exe", "daggerwalk_twitch_bot.py"], cwd=os.path.dirname(__file__))
+    subprocess.Popen([r"daggerwalk_venv\Scripts\python.exe", "daggerwalk_bot_monitor.py"], cwd=os.path.dirname(__file__))
 
 
 def cleanup_and_exit(signum, frame):
@@ -256,7 +256,7 @@ if __name__ == "__main__":
 
     start_daggerfall()
     start_obs()
-    start_twitch_bot()
+    start_bot_monitor()
 
     logging.info("DaggerWalk is now running! (Press Ctrl+C to stop)")
 
