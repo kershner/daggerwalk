@@ -256,7 +256,6 @@ if __name__ == "__main__":
 
     start_daggerfall()
     start_obs()
-    start_bot_monitor()
 
     logging.info("DaggerWalk is now running! (Press Ctrl+C to stop)")
 

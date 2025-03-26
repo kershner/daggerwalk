@@ -236,7 +236,7 @@ class DaggerfallBot(commands.Bot):
             "up": lambda: self.send_movement(GameKeys.UP, args),
             "down": lambda: self.send_movement(GameKeys.DOWN, args),
             "jump": lambda: self.send_movement(GameKeys.JUMP),
-            "stop": lambda: self.send_movement(GameKeys.BACK, repeat=1),
+            "stop": lambda: self.send_movement(GameKeys.BACK),
             "map": self.toggle_map,
             "save": self.save_game,
             "load": lambda: self.admin_command(message, self.load_game),
