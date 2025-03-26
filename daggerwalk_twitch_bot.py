@@ -76,13 +76,16 @@ class Config:
 def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
     """Send keyboard input to Daggerfall Unity window"""
     try:
+        # Create a fresh Application instance each time
         window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
                       if w.title == "Daggerfall Unity"), None)
+                      
         if not window:
             logging.warning("Game window not found")
             return
             
-        app = pywinauto.Application().connect(handle=window._hWnd)
+        # Force a completely new connection every time, with no caching
+        app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
         dlg = app.window(handle=window._hWnd)
         
         logging.info(f"Sending input: {key} ({repeat} times)")
