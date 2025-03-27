@@ -509,7 +509,7 @@ class DaggerfallBot(commands.Bot):
                 "Midyear": "Summer", 
                 "Last Seed": "Summer", 
                 "Hearthfire": "Autumn", 
-                "Sun's Dusk": "Autumn", 
+                "Sun's Height": "Autumn", 
                 "Frostfall": "Autumn"
             }.get(month, "Unknown")
 
