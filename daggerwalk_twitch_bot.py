@@ -418,31 +418,12 @@ class DaggerfallBot(commands.Bot):
         """Change background music"""
         logging.info(f"Executing song command with choice: {choice}")
         
-        # Send command to change song
         self.send_console_command(f"song {choice}")
         
-        # For direct track numbers, use cached info
-        if choice and choice.isdigit():
-            track_id = choice
-            track_name = next((track['TrackName'] for track in self._music_tracks 
-                              if str(track['TrackID']) == track_id), "Unknown")
-            
-            await self.connected_channels[0].send(f'Song changed! Now playing: {track_name} (Track {track_id})')
-            return
-            
-        # For random/other choices, check for changes with retries
-        before_song = (await self.get_map_json_data()).get('currentSong', 'Unknown')
+        await asyncio.sleep(5)
         
-        max_retries = 5
-        for _ in range(max_retries):
-            await asyncio.sleep(10)
-            current_song = (await self.get_map_json_data()).get('currentSong', 'Unknown')
-            if current_song != before_song:
-                break
-        
-        track_id = self._track_map.get(current_song, 'Unknown')
-        await self.connected_channels[0].send(f'Song changed! Now playing: {current_song} (Track {track_id})')
-        return
+        channel = self.connected_channels[0]
+        await channel.send('Song changed!')
 
     async def song_category(self, categories):
         """Change music to a random song from specified categories"""
