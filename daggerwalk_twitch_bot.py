@@ -505,12 +505,13 @@ class DaggerfallBot(commands.Bot):
                 "Evening Star": "Winter",
                 "First Seed": "Spring", 
                 "Rain's Hand": "Spring",
-                "Second Seed": "Summer", 
+                "Second Seed": "Spring", 
                 "Midyear": "Summer", 
                 "Last Seed": "Summer", 
-                "Hearthfire": "Autumn", 
-                "Sun's Height": "Autumn", 
-                "Frostfall": "Autumn"
+                "Sun's Height": "Summer",
+                "Hearthfire": "Autumn",  
+                "Frostfall": "Autumn",
+                "Sun's Dusk": "Autumn",
             }.get(month, "Unknown")
 
             # Emoji mappings
