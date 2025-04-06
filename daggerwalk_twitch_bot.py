@@ -137,6 +137,8 @@ def post_to_django(data, reset=False):
         else:
             logging.warning(f"Django post returned non-201 status: {response.status_code}. Response: {response.text}")
 
+        return response            
+
     except requests.Timeout:
         logging.error(f"Timeout posting to Django after 5s: {Config.DJANGO_LOG_URL}")
     except requests.ConnectionError:
@@ -235,7 +237,7 @@ class DaggerfallBot(commands.Bot):
             "right": lambda: self.send_movement(GameKeys.RIGHT, args),
             "up": lambda: self.send_movement(GameKeys.UP, args),
             "down": lambda: self.send_movement(GameKeys.DOWN, args),
-            "jump": lambda: self.send_movement(GameKeys.JUMP),
+            "jump": lambda: self.send_movement(GameKeys.JUMP, repeat=10),
             "stop": lambda: self.send_movement(GameKeys.BACK),
             "map": self.toggle_map,
             "save": self.save_game,
@@ -481,71 +483,95 @@ class DaggerfallBot(commands.Bot):
     async def game_info(self):
         """Display game state information"""
         try:
-            # Load map data
+            # Load map data and send to API
             data = await self.get_map_json_data()
+            response = post_to_django(data)
             
-            # Cache music tracks and track map if not already done
+            # Cache music tracks if needed
             if not hasattr(self, '_music_tracks'):
-                music_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 
-                                            'list_music_tracks.json')
+                music_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'list_music_tracks.json')
                 self._music_tracks = await self.load_json_async(music_data_path)
                 self._track_map = {track['TrackName']: track['TrackID'] for track in self._music_tracks}
 
-            # Convert time
-            date_parts = data['date'].split(',')
-            time = datetime.strptime(date_parts[-1].strip(), '%H:%M:%S')
-            time_12hr = time.strftime('%I:%M %p').lstrip('0')
-            date = f"{','.join(date_parts[:-1]).strip()}, {time_12hr}"
-
-            # Season lookup
-            month = date_parts[1].strip().split(" ", 1)[-1]  # Extract month
-            season = {
-                "Morning Star": "Winter", 
-                "Sun's Dawn": "Winter", 
-                "Evening Star": "Winter",
-                "First Seed": "Spring", 
-                "Rain's Hand": "Spring",
-                "Second Seed": "Spring", 
-                "Midyear": "Summer", 
-                "Last Seed": "Summer", 
-                "Sun's Height": "Summer",
-                "Hearthfire": "Autumn",  
-                "Frostfall": "Autumn",
-                "Sun's Dusk": "Autumn",
-            }.get(month, "Unknown")
-
-            # Emoji mappings
-            weather_emoji = {
-                "Sunny": "☀️", "Clear": "🌙", "Cloudy": "☁️", "Foggy": "🌫️",
-                "Rainy": "🌧️", "Snowy": "🌨️", "Thunderstorm": "⛈️", "Blizzard": "❄️"
-            }.get(data['weather'], "🌈")
-
-            season_emoji = {
-                "Winter": "☃️", "Spring": "🌸", "Summer": "🌻", "Autumn": "🍂"
-            }.get(season, "❓")
-
-            # Get current song info
-            current_song = data.get('currentSong', '')
-            track_id = self._track_map.get(current_song, 'Unknown')
-            music_info = f"🎵 {current_song} (Track {track_id})" if current_song else ""
-
-            # Build status message efficiently
-            map_link = f"🗺️ Map: https://kershner.org/daggerwalk?region={data['region'].replace(' ', '+')}"
-            status = " ".join(filter(None, [
-                f"🌍 {data['region']}", f"📍 {data['location']}", f"📅 {date}",
-                f"{season_emoji} {season}", f"{weather_emoji} {data['weather']}", music_info, map_link
+            # Process API response
+            response_data = response.json()
+            log_data = response_data['log_data']
+            log_json = json.loads(log_data['log']) if isinstance(log_data.get('log'), str) else log_data.get('log', {})
+            region_fk = log_json.get('region_fk', {})
+            
+            # Extract basic data
+            region = log_json.get('region', '')
+            location = log_json.get('location', '')
+            weather = log_json.get('weather', '')
+            season = log_json.get('season', '')
+            current_song = log_json.get('current_song', '')
+            in_ocean = log_data.get('in_ocean') == 'true'
+            climate = region_fk.get('climate', '')
+            
+            # Get climate emoji from region_fk or fallback
+            climate_emoji = ""
+            if region_fk.get('emoji'):
+                try:
+                    climate_emoji = region_fk['emoji'].encode('latin1').decode('unicode-escape')
+                except:
+                    # Fallback emoji based on climate
+                    climate_emoji = {
+                        "Desert": "🏜️",
+                        "Rainforest": "🍃",
+                        "Arctic": "❄️",
+                        "Temperate": "🌲",
+                        "Swamp": "🥀",
+                        "Mountains": "⛰️",
+                        "Savanna": "🌾",
+                        "Volcanic": "🌋"
+                    }.get(climate, "")
+            
+            # Format time
+            date_str = log_json.get('date', '')
+            date = ""
+            time_12hr = ""
+            if date_str and ',' in date_str:
+                date_parts = date_str.split(',')
+                time_part = date_parts[-1].strip()
+                try:
+                    time = datetime.strptime(time_part, '%H:%M:%S')
+                    time_12hr = time.strftime('%I:%M %p').lstrip('0')
+                    date = f"{','.join(date_parts[:-1]).strip()}"
+                except ValueError:
+                    date = date_str
+            
+            # Weather and season emojis
+            weather_emoji = {"Sunny": "☀️", "Clear": "🌙", "Cloudy": "☁️", "Foggy": "🌫️",
+                            "Rainy": "🌧️", "Snowy": "🌨️", "Thunderstorm": "⛈️", "Blizzard": "❄️"}.get(weather, "🌈")
+            season_emoji = {"Winter": "☃️", "Spring": "🌸", "Summer": "🌻", "Autumn": "🍂"}.get(season, "❓")
+            
+            # Get track ID and music info
+            track_id = self._track_map.get(current_song, None)
+            music_info = f"🎵{current_song} (Track {track_id})" if current_song and track_id is not None else ""
+            
+            # Build map link
+            map_link = f"🗺️Map: https://kershner.org/daggerwalk?region={region.replace(' ', '+')}" if region else ""
+            
+            # Format location - ensuring climate emoji is used
+            if in_ocean:
+                location_part = f"🌊Ocean near {log_json.get('last_known_region', '')}"
+            else:
+                location_part = f"🌍{region}{climate_emoji}{climate} {location}"
+                logging.info(f"Location part: {location_part}")  # Debug to see what's happening with the emoji
+            
+            # Format status message - no spaces around emojis
+            status = "\n".join(filter(None, [
+                location_part,
+                f"⌚{time_12hr}📅{date}",
+                f"{season_emoji}{season}{weather_emoji}{weather}{music_info}{map_link}"
             ]))
             
-            # Async API request
-            post_to_django(data)
-
             logging.info(f"Game status: {status}")
-
-            # Send message asynchronously
+            
+            # Send message
             if self.connected_channels:
-                channel = self.connected_channels[0]
-                await channel.send(status)
-
+                await self.connected_channels[0].send(status)
+                
         except Exception as e:
             logging.error(f"Info error: {e}")
 
