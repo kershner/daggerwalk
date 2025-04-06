@@ -46,7 +46,9 @@ class Config:
     
     ACTIVE_MODS = [
         "World of Daggerfall", "Interesting Eroded Terrains",
-        "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass"
+        "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass",
+        "Third Person Camera", "Birds in Daggerfall", "HUD Be Gone", "Faster Nights",
+        "Auto Walk", "Custom Music Player"
     ]
 
     _params = None
