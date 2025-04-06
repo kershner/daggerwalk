@@ -508,23 +508,26 @@ class DaggerfallBot(commands.Bot):
             in_ocean = log_data.get('in_ocean') == 'true'
             climate = region_fk.get('climate', '')
             
-            # Get climate emoji from region_fk or fallback
-            climate_emoji = ""
-            if region_fk.get('emoji'):
+            # Use a more robust method to decode Unicode escape sequences
+            def decode_emoji(emoji_str):
+                if not emoji_str:
+                    return ""
                 try:
-                    climate_emoji = region_fk['emoji'].encode('latin1').decode('unicode-escape')
-                except:
-                    # Fallback emoji based on climate
-                    climate_emoji = {
-                        "Desert": "🏜️",
-                        "Rainforest": "🍃",
-                        "Arctic": "❄️",
-                        "Temperate": "🌲",
-                        "Swamp": "🥀",
-                        "Mountains": "⛰️",
-                        "Savanna": "🌾",
-                        "Volcanic": "🌋"
-                    }.get(climate, "")
+                    import ast
+                    # Convert Unicode escape sequence to Python string literal and evaluate it
+                    return ast.literal_eval(f'"{emoji_str}"')
+                except Exception as e:
+                    logging.error(f"Failed to decode emoji: {e}")
+                    return ""
+            
+            # Get climate emoji from region_fk
+            climate_emoji = decode_emoji(region_fk.get('emoji', ''))
+            
+            # Extract POI emoji - handle null POI case
+            poi = log_json.get('poi')
+            poi_emoji = ""
+            if poi is not None and isinstance(poi, dict):  # Check if poi exists and is a dictionary
+                poi_emoji = decode_emoji(poi.get('emoji', ''))
             
             # Format time
             date_str = log_json.get('date', '')
@@ -552,18 +555,22 @@ class DaggerfallBot(commands.Bot):
             # Build map link
             map_link = f"🗺️Map: https://kershner.org/daggerwalk?region={region.replace(' ', '+')}" if region else ""
             
-            # Format location - ensuring climate emoji is used
+            # Format location - now with POI emoji
             if in_ocean:
                 location_part = f"🌊Ocean near {log_json.get('last_known_region', '')}"
             else:
-                location_part = f"🌍{region}{climate_emoji}{climate} {location}"
+                location_part = f"🌍{region}{climate_emoji}{climate} {poi_emoji}{location}"
                 logging.info(f"Location part: {location_part}")  # Debug to see what's happening with the emoji
             
-            # Format status message - no spaces around emojis
-            status = "\n".join(filter(None, [
+            # Format status message - with spaces between parts
+            status = " ".join(filter(None, [
                 location_part,
-                f"⌚{time_12hr}📅{date}",
-                f"{season_emoji}{season}{weather_emoji}{weather}{music_info}{map_link}"
+                f"⌚{time_12hr}", 
+                f"📅{date}",
+                f"{season_emoji}{season}",
+                f"{weather_emoji}{weather}",
+                f"{music_info}",
+                f"{map_link}"
             ]))
             
             logging.info(f"Game status: {status}")
@@ -571,7 +578,7 @@ class DaggerfallBot(commands.Bot):
             # Send message
             if self.connected_channels:
                 await self.connected_channels[0].send(status)
-                
+                    
         except Exception as e:
             logging.error(f"Info error: {e}")
 
