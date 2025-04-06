@@ -30,6 +30,7 @@ class GameKeys(Enum):
     CONSOLE = "`"
     ESC = "{ESC}"
     USE = "k"
+    SELFIE = "O"
 
 class Config:
     """Bot configuration settings"""
@@ -242,6 +243,7 @@ class DaggerfallBot(commands.Bot):
             "stop": lambda: self.send_movement(GameKeys.BACK),
             "use": lambda: self.send_movement(GameKeys.USE),
             "map": self.toggle_map,
+            "selfie": self.toggle_selfie,
             "save": self.save_game,
             "load": lambda: self.admin_command(message, self.load_game),
             "modlist": self.modlist,
@@ -403,6 +405,11 @@ class DaggerfallBot(commands.Bot):
             send_game_input(GameKeys.MAP.value)  # Press V
             time.sleep(2)
             send_game_input(GameKeys.MAP.value)  # Press V again
+
+    async def toggle_selfie(self):
+        """Toggle Third Person Camera mod in game"""
+        logging.info("Executing selfie command")
+        send_game_input(GameKeys.SELFIE.value)
 
     async def reset(self):
         """Reset to random location"""
@@ -593,7 +600,7 @@ class DaggerfallBot(commands.Bot):
             "💀🌲Daggerwalk Commands: "
             "!walk • !stop • !jump • !use • !esc • !left [num] • "
             "!right [num] • !up [num] • !down [num] • !forward [num] • "
-            "!back [num] • !map • !modlist • !song • !reset"
+            "!back [num] • !map • !modlist • !song • !reset • !selfie"
         )
         
         await channel.send(combined_message)
