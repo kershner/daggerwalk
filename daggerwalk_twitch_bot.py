@@ -29,6 +29,7 @@ class GameKeys(Enum):
     LOAD = "{F11}"
     CONSOLE = "`"
     ESC = "{ESC}"
+    USE = "k"
 
 class Config:
     """Bot configuration settings"""
@@ -239,6 +240,7 @@ class DaggerfallBot(commands.Bot):
             "down": lambda: self.send_movement(GameKeys.DOWN, args),
             "jump": lambda: self.send_movement(GameKeys.JUMP, repeat=10),
             "stop": lambda: self.send_movement(GameKeys.BACK),
+            "use": lambda: self.send_movement(GameKeys.USE),
             "map": self.toggle_map,
             "save": self.save_game,
             "load": lambda: self.admin_command(message, self.load_game),
@@ -589,7 +591,7 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "💀🌲Daggerwalk Commands: "
-            "!walk • !stop • !jump • !esc • !left [num] • "
+            "!walk • !stop • !jump • !use • !esc • !left [num] • "
             "!right [num] • !up [num] • !down [num] • !forward [num] • "
             "!back [num] • !map • !modlist • !song • !reset"
         )
