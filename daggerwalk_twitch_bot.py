@@ -413,7 +413,7 @@ class DaggerfallBot(commands.Bot):
         """Toggle Third Person Camera mod in game"""
         logging.info("Executing selfie command")
         send_game_input(GameKeys.SELFIE.value)
-        time.sleep(5)
+        time.sleep(8)
         send_game_input(GameKeys.SELFIE.value)
 
     async def use_shotgun(self):
