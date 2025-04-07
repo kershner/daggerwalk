@@ -246,6 +246,7 @@ class DaggerfallBot(commands.Bot):
             "use": lambda: self.send_movement(GameKeys.USE),
             "map": self.toggle_map,
             "selfie": self.toggle_selfie,
+            "shotgun": self.use_shotgun,
             "save": self.save_game,
             "load": lambda: self.admin_command(message, self.load_game),
             "modlist": self.modlist,
@@ -412,6 +413,23 @@ class DaggerfallBot(commands.Bot):
         """Toggle Third Person Camera mod in game"""
         logging.info("Executing selfie command")
         send_game_input(GameKeys.SELFIE.value)
+
+    async def use_shotgun(self):
+        """Use shotgun weapon by raising weapon, firing, and then lowering it"""
+        logging.info("Executing shotgun command")
+        
+        # Raise weapon
+        logging.info("Raising weapon")
+        send_game_input('Z')
+        time.sleep(0.5)
+        
+        # Fire weapon
+        logging.info("Firing weapon")
+        send_game_input('X')
+        
+        # Wait before lowering weapon
+        time.sleep(1)
+        send_game_input('Z')
 
     async def reset(self):
         """Reset to random location"""
