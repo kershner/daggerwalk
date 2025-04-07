@@ -421,7 +421,7 @@ class DaggerfallBot(commands.Bot):
         # Raise weapon
         logging.info("Raising weapon")
         send_game_input('Z')
-        time.sleep(1)
+        time.sleep(0.5)
         
         # Fire weapon
         logging.info("Firing weapon")
