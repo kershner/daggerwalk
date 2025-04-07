@@ -620,7 +620,7 @@ class DaggerfallBot(commands.Bot):
             "💀🌲Daggerwalk Commands: "
             "!walk • !stop • !jump • !use • !esc • !left [num] • "
             "!right [num] • !up [num] • !down [num] • !forward [num] • "
-            "!back [num] • !map • !modlist • !song • !reset • !selfie"
+            "!back [num] • !map • !modlist • !shotgun • !song • !reset • !selfie"
         )
         
         await channel.send(combined_message)
