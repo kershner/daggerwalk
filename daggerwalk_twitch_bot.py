@@ -47,8 +47,8 @@ class Config:
     ACTIVE_MODS = [
         "World of Daggerfall", "Interesting Eroded Terrains",
         "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass",
-        "Third Person Camera", "Birds in Daggerfall", "HUD Be Gone", "Faster Nights",
-        "Auto Walk", "Custom Music Player"
+        "Third Person Camera", "Birds in Daggerfall", "HUD Be Gone", "Future Shock Weapons",
+        "Immersive Footsteps", "Faster Nights", "Auto Walk", "Custom Music Player"
     ]
 
     _params = None
@@ -421,14 +421,14 @@ class DaggerfallBot(commands.Bot):
         # Raise weapon
         logging.info("Raising weapon")
         send_game_input('Z')
-        time.sleep(0.5)
+        time.sleep(1)
         
         # Fire weapon
         logging.info("Firing weapon")
         send_game_input('X')
         
         # Wait before lowering weapon
-        time.sleep(1)
+        time.sleep(2)
         send_game_input('Z')
 
     async def reset(self):
