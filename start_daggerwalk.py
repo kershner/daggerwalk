@@ -198,8 +198,8 @@ def start_bot_monitor():
     # Check if the bot monitor batch file is already running
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            cmdline = " ".join(proc.info["cmdline"]).lower()
-            if "start_daggerwalk_bot_monitor.bat" in cmdline:
+            cmdline = proc.info.get("cmdline")
+            if cmdline and "start_daggerwalk_bot_monitor.bat" in " ".join(cmdline).lower():
                 logging.info("Bot monitor already running. Skipping.")
                 return
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
