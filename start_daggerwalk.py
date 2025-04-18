@@ -194,6 +194,23 @@ def start_bot_monitor():
     logging.info("Starting Twitch bot...")
     subprocess.Popen([r"daggerwalk_venv\Scripts\python.exe", "daggerwalk_bot_monitor.py"], cwd=os.path.dirname(__file__))
 
+def start_bot_monitor():
+    # Check if the bot monitor batch file is already running
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            cmdline = " ".join(proc.info["cmdline"]).lower()
+            if "start_daggerwalk_bot_monitor.bat" in cmdline:
+                logging.info("Bot monitor already running. Skipping.")
+                return
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    logging.info("Starting bot monitor via batch script...")
+    subprocess.Popen(
+        ["start", "", "start_daggerwalk_bot_monitor.bat"],
+        shell=True,
+        cwd=os.path.dirname(__file__)
+    )
 
 def cleanup_and_exit(signum, frame):
     logging.info("Stopping DaggerWalk automation... (Received Ctrl+C or SIGTERM)")
@@ -254,9 +271,10 @@ signal.signal(signal.SIGTERM, cleanup_and_exit)
 if __name__ == "__main__":
     logging.info("=== Starting DaggerWalk Automation ===")
 
-    start_daggerfall()
     start_obs()
-
+    start_daggerfall()
+    start_bot_monitor()
+    
     logging.info("DaggerWalk is now running! (Press Ctrl+C to stop)")
 
     try:
