@@ -195,8 +195,8 @@ class DaggerfallBot(commands.Bot):
             "song": "change the background music",
             "weather": "change the weather",
             "levitate": "start or stop levitating",
-            "toggle_ai": "toggle enemy AI on or off",
-            "exit": "teleport out of the current building or dungeon"
+            "toggle_ai": "toggle enemy AI",
+            "exit": "teleport out of the current building"
         }
 
     async def event_ready(self):
@@ -445,6 +445,8 @@ class DaggerfallBot(commands.Bot):
             args = self.current_vote_message.content.split()[1:]
             levitate_choice = args[0] if args else "off"
             await self.levitate(levitate_choice)
+        elif self.current_vote_type == "toggle_ai":
+            await self.toggle_enemy_ai()
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -546,7 +548,7 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         weather_emoji = Config.WEATHER_EMOJIS.get(weather_choice.title(), "🌈")
-        await channel.send(f'Weather changed to: {weather_emoji}{weather_choice}!')
+        await channel.send(f'Weather changed to: {weather_emoji}{weather_choice.title()}!')
 
     async def levitate(self, levitate_choice):
         """Toggle levitatation on/off"""
@@ -558,6 +560,17 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send(f'Levitate set to: {levitate_choice}!')
+
+    async def toggle_enemy_ai(self, _=None):
+        """Toggle enemy AI on/off"""
+        logging.info("Executing toggle_enemy_ai command")
+
+        self.send_console_command("tai")
+
+        await asyncio.sleep(5)
+        
+        channel = self.connected_channels[0]
+        await channel.send("Toggled enemy AI!")
 
     async def killall(self):
         """Kill all enemies"""
