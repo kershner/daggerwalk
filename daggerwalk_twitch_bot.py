@@ -94,7 +94,12 @@ def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
         
         logging.info(f"Sending input: {key} ({repeat} times)")
         for _ in range(repeat):
-            dlg.send_keystrokes(key)
+            for char in key:
+                if char == "_":
+                    dlg.send_keystrokes("{_}")  # Escape underscore for literal input
+                else:
+                    dlg.send_keystrokes(char)
+                time.sleep(0.01)
             time.sleep(delay)
             
     except Exception as e:
@@ -163,7 +168,11 @@ class DaggerfallBot(commands.Bot):
         
         self.votable_commands = {
             "reset": "reset to last known location",
-            "song": "change the background music"
+            "song": "change the background music",
+            "weather": "change the weather",
+            "levitate": "start or stop levitating",
+            "toggle_ai": "toggle enemy AI on or off",
+            "exit": "teleport out of current building or dungeon"
         }
 
     async def event_ready(self):
@@ -254,7 +263,12 @@ class DaggerfallBot(commands.Bot):
             "exec": lambda: self.admin_command(message, lambda: self.exec_command(args)),
             "esc": lambda: self.send_movement(GameKeys.ESC, args),
             "killall": self.killall,
-            "info": self.game_info
+            "info": self.game_info,
+            # "more": "",
+            # "weather": "",
+            # "levitate": "",
+            # "toggle_ai": "",
+            # "exit": ""
         }
 
         if command in command_map:
