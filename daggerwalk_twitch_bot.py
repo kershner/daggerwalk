@@ -93,41 +93,28 @@ class Config:
         params = cls.load_params()
         return params.get("daggerwalk_api_key", "")
 
-def get_daggerfall_window():
-    """Return connected pywinauto window for Daggerfall Unity"""
-    window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
-                  if w.title == "Daggerfall Unity"), None)
-    if not window:
-        logging.warning("Game window not found")
-        return None
-    app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
-    return app.window(handle=window._hWnd)
-
 def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
     """Send keyboard input to Daggerfall Unity window"""
     try:
-        dlg = get_daggerfall_window()
-        if not dlg:
+        window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
+                      if w.title == "Daggerfall Unity"), None)
+
+        if not window:
+            logging.warning("Game window not found")
             return
+
+        app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
+        dlg = app.window(handle=window._hWnd)
 
         logging.info(f"Sending input: {key} ({repeat} times)")
         for _ in range(repeat):
-            dlg.send_keystrokes(key)
+            # Replace underscores in full-string commands
+            safe_key = key.replace("_", "+-")
+            dlg.type_keys(safe_key, with_spaces=True, pause=0.01)
             time.sleep(delay)
+
     except Exception as e:
         logging.error(f"Input error: {e}")
-
-def send_literal_text(text: str):
-    """Send literal text to Daggerfall Unity (e.g. console commands)"""
-    try:
-        dlg = get_daggerfall_window()
-        if not dlg:
-            return
-
-        logging.info(f"Typing literal text: {text}")
-        dlg.type_keys(text, with_spaces=True, pause=0.01, set_foreground=False)
-    except Exception as e:
-        logging.error(f"Text input error: {e}")
 
 def post_to_django(data, reset=False):
     """Post game state data to Django endpoint in background"""
@@ -613,7 +600,6 @@ class DaggerfallBot(commands.Bot):
         channel = self.connected_channels[0]
         await channel.send(f'Gravity set to: {gravity_level}!')
 
-
     async def killall(self):
         """Kill all enemies"""
         logging.info("Executing killall command")
@@ -624,21 +610,7 @@ class DaggerfallBot(commands.Bot):
         logging.info(f"Sending console command: {command}")
         send_game_input(GameKeys.CONSOLE.value)  # Open console
         time.sleep(0.5)
-
-        try:
-            dlg = get_daggerfall_window()
-            if not dlg:
-                return
-
-            # Replace special characters
-            command = command.replace("_", "+-")  # Replace _ with Shift + -
-            command = command.replace(" ", "{SPACE}")  # Replace space with literal space key
-
-            dlg.type_keys(command, pause=0.01)  # Let pywinauto handle the whole string
-
-        except Exception as e:
-            logging.error(f"Console typing error: {e}")
-
+        send_game_input(command)  # Send full command
         time.sleep(0.1)
         send_game_input("{ENTER}")
         time.sleep(1)
