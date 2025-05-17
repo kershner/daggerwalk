@@ -94,12 +94,7 @@ def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
         
         logging.info(f"Sending input: {key} ({repeat} times)")
         for _ in range(repeat):
-            for char in key:
-                if char == "_":
-                    dlg.send_keystrokes("{_}")  # Escape underscore for literal input
-                else:
-                    dlg.send_keystrokes(char)
-                time.sleep(0.01)
+            dlg.send_keystrokes(key)
             time.sleep(delay)
             
     except Exception as e:
@@ -172,7 +167,7 @@ class DaggerfallBot(commands.Bot):
             "weather": "change the weather",
             "levitate": "start or stop levitating",
             "toggle_ai": "toggle enemy AI on or off",
-            "exit": "teleport out of current building or dungeon"
+            "exit": "teleport out of the current building or dungeon"
         }
 
     async def event_ready(self):
@@ -264,7 +259,7 @@ class DaggerfallBot(commands.Bot):
             "esc": lambda: self.send_movement(GameKeys.ESC, args),
             "killall": self.killall,
             "info": self.game_info,
-            # "more": "",
+            "more": self.more_commands,
             # "weather": "",
             # "levitate": "",
             # "toggle_ai": "",
@@ -395,6 +390,9 @@ class DaggerfallBot(commands.Bot):
                 # Handle regular song command
                 song_choice = args[0] if args else "random"
                 await self.song(song_choice)
+        elif self.current_vote_type == "weather":
+            args = self.current_vote_message.content.split()[1:]
+            await self.weather(args)
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -485,6 +483,15 @@ class DaggerfallBot(commands.Bot):
         channel = self.connected_channels[0]
         categories_str_display = ", ".join(categories)
         await channel.send(f'Song shuffle categories changed to: {categories_str_display}!')
+
+    async def weather(self, args):
+        """Change in-game weather"""
+        logging.info(f"Executing weather command with args: {args}")
+        
+        await asyncio.sleep(5)
+        
+        channel = self.connected_channels[0]
+        await channel.send('Weather changed!')
 
     async def killall(self):
         """Kill all enemies"""
@@ -627,6 +634,17 @@ class DaggerfallBot(commands.Bot):
         except Exception as e:
             logging.error(f"Info error: {e}")
 
+    async def more_commands(self):
+        """Display more commands"""
+        logging.info("Executing more commands")
+        channel = self.connected_channels[0]
+        
+        combined_message = (
+            "!weather • !levitate • !toggle_ai • !exit • "
+        )
+        
+        await channel.send(combined_message)
+
     async def help(self):
         """Display available commands"""
         logging.info("Executing help command")
@@ -636,7 +654,8 @@ class DaggerfallBot(commands.Bot):
             "💀🌲Daggerwalk Commands: "
             "!walk • !stop • !jump • !use • !esc • !left [num] • "
             "!right [num] • !up [num] • !down [num] • !forward [num] • "
-            "!back [num] • !map • !modlist • !shotgun • !song • !reset • !selfie"
+            "!back [num] • !map • !modlist • !shotgun • !song • !reset • !selfie • "
+            "!more"
         )
         
         await channel.send(combined_message)
