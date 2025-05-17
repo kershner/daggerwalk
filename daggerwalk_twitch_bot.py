@@ -56,11 +56,16 @@ class Config:
         "sunny": 0,
         "cloudy": 1,
         "overcast": 2,
-        "fog": 3,
-        "rain": 4,
+        "foggy": 3,
+        "rainy": 4,
         "thunderstorm": 5,
-        "snow": 6,
+        "snowy": 6,
     }
+
+    WEATHER_EMOJIS = {"Sunny": "☀️", "Clear": "🌙", "Cloudy": "☁️", "Foggy": "🌫️",
+                        "Rainy": "🌧️", "Snowy": "🌨️", "Thunderstorm": "⛈️"}
+    
+    SEASON_EMOJIS = {"Winter": "☃️", "Spring": "🌸", "Summer": "🌻", "Autumn": "🍂"}
 
     _params = None
 
@@ -540,7 +545,8 @@ class DaggerfallBot(commands.Bot):
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        await channel.send(f'Weather changed to: {weather_choice}!')
+        weather_emoji = Config.WEATHER_EMOJIS.get(weather_choice.title(), "🌈")
+        await channel.send(f'Weather changed to: {weather_emoji}{weather_choice}!')
 
     async def levitate(self, levitate_choice):
         """Toggle levitatation on/off"""
@@ -674,9 +680,8 @@ class DaggerfallBot(commands.Bot):
                     date = date_str
             
             # Weather and season emojis
-            weather_emoji = {"Sunny": "☀️", "Clear": "🌙", "Cloudy": "☁️", "Foggy": "🌫️",
-                            "Rainy": "🌧️", "Snowy": "🌨️", "Thunderstorm": "⛈️", "Blizzard": "❄️"}.get(weather, "🌈")
-            season_emoji = {"Winter": "☃️", "Spring": "🌸", "Summer": "🌻", "Autumn": "🍂"}.get(season, "❓")
+            weather_emoji = Config.WEATHER_EMOJIS.get(weather, "🌈")
+            season_emoji = Config.SEASON_EMOJIS.get(season, "❓")
             
             # Get track ID and music info
             track_id = self._track_map.get(current_song, None)
@@ -712,17 +717,6 @@ class DaggerfallBot(commands.Bot):
         except Exception as e:
             logging.error(f"Info error: {e}")
 
-    async def more_commands(self):
-        """Display more commands"""
-        logging.info("Executing more commands")
-        channel = self.connected_channels[0]
-        
-        combined_message = (
-            "!weather • !levitate • !toggle_ai • !exit"
-        )
-        
-        await channel.send(combined_message)
-
     async def help(self):
         """Display available commands"""
         logging.info("Executing help command")
@@ -738,6 +732,18 @@ class DaggerfallBot(commands.Bot):
         
         await channel.send(combined_message)
 
+    async def more_commands(self):
+        """Display more commands"""
+        logging.info("Executing more commands")
+        channel = self.connected_channels[0]
+        
+        combined_message = (
+            "🗡️More Daggerwalk Commands: "
+            "!weather • !levitate • !toggle_ai • !exit"
+        )
+        
+        await channel.send(combined_message)
+    
     async def modlist(self):
         """Display active mods"""
         logging.info("Executing modlist command")
