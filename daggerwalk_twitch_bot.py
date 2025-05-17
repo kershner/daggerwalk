@@ -578,12 +578,8 @@ class DaggerfallBot(commands.Bot):
         """Teleport outside building/dungeon or do nothing"""
         logging.info("Executing exit command")
 
-        # self.send_console_command("trans_out")
-        msg = {
-            'author': { 'name': 'daggerwalk' }
-        }
-        self.admin_command(None, msg, 'trans_out')
-
+        self.send_console_command("trans_out 0")
+        
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
