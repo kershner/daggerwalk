@@ -51,6 +51,17 @@ class Config:
         "Immersive Footsteps", "Faster Nights", "Auto Walk", "Custom Music Player"
     ]
 
+    WEATHER_TYPES_MAP = {
+        "sunny": 0,
+        "cloudy": 1,
+        "overcast": 2,
+        "foggy": 3,
+        "rainy": 4,
+        "thunderstorm": 5,
+        "snowy": 6,
+        "blizzard": 7
+    }
+
     _params = None
 
     @classmethod
@@ -304,13 +315,19 @@ class DaggerfallBot(commands.Bot):
         except ValueError:
             # If it's not a valid string or convertible to int, it's invalid
             return False, default_msg
+        
+    def validate_weather_arg(self, args):
+        """Validate weather selection"""
+        if not args or args[0].lower() not in self.WEATHER_TYPES_MAP:
+            return False, f"Specify weather type: {', '.join(self.WEATHER_TYPES_MAP.keys())}"
+        return True, None
 
     async def start_vote(self, message, vote_type):
         if self.voting_active:
             await message.channel.send("A vote is already in progress!")
             return
 
-        # Special handling for song category command
+        # Special handling to validate command args
         if vote_type == "song":
             args = message.content.split()[1:] if len(message.content.split()) > 1 else []
             if args and args[0].lower() == "category":
@@ -326,6 +343,11 @@ class DaggerfallBot(commands.Bot):
                 if not self.validate_song_arg(args)[0]:
                     await message.channel.send(self.validate_song_arg(args)[1])
                     return
+        elif vote_type == "weather":
+            args = message.content.split()[1:] if len(message.content.split()) > 1 else []
+            if not self.validate_weather_arg(args)[0]:
+                await message.channel.send(self.validate_weather_arg(args)[1])
+                return
 
         logging.info(f"Starting vote for {vote_type}")
         self.voting_active = True
@@ -391,8 +413,8 @@ class DaggerfallBot(commands.Bot):
                 song_choice = args[0] if args else "random"
                 await self.song(song_choice)
         elif self.current_vote_type == "weather":
-            args = self.current_vote_message.content.split()[1:]
-            await self.weather(args)
+            weather_choice = args[0] if args else "sunny"
+            await self.weather(weather_choice)
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -484,14 +506,16 @@ class DaggerfallBot(commands.Bot):
         categories_str_display = ", ".join(categories)
         await channel.send(f'Song shuffle categories changed to: {categories_str_display}!')
 
-    async def weather(self, args):
+    async def weather(self, weather_choice):
         """Change in-game weather"""
-        logging.info(f"Executing weather command with args: {args}")
-        
+        logging.info(f"Executing weather command with choice: {weather_choice}")
+
+        # self.send_console_command(f"song set_weather {weather_choice}")
+
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        await channel.send('Weather changed!')
+        # await channel.send('Weather changed!')
 
     async def killall(self):
         """Kill all enemies"""
@@ -640,7 +664,7 @@ class DaggerfallBot(commands.Bot):
         channel = self.connected_channels[0]
         
         combined_message = (
-            "!weather • !levitate • !toggle_ai • !exit • "
+            "!weather • !levitate • !toggle_ai • !exit"
         )
         
         await channel.send(combined_message)
