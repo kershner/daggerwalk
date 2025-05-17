@@ -334,7 +334,7 @@ class DaggerfallBot(commands.Bot):
     def validate_levitate_args(self, args):
         """Validate levitate selection"""
         if not args or args[0].lower() not in ["on", "off"]:
-            return False, 'Specify "on" or "off"'
+            return False, 'Specify levitate setting: "on" or "off"'
         return True, None
 
     async def start_vote(self, message, vote_type):
@@ -551,7 +551,7 @@ class DaggerfallBot(commands.Bot):
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        await channel.send(f'Levitation set to: {levitate_choice}!')
+        await channel.send(f'Levitate set to: {levitate_choice}!')
 
     async def killall(self):
         """Kill all enemies"""
