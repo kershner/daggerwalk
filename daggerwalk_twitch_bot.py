@@ -196,7 +196,8 @@ class DaggerfallBot(commands.Bot):
             "weather": "change the weather",
             "levitate": "start or stop levitating",
             "toggle_ai": "toggle enemy AI",
-            "exit": "teleport out of the current building"
+            "exit": "teleport out of the current building",
+            "gravity": "set gravity level"
         }
 
     async def event_ready(self):
@@ -341,6 +342,12 @@ class DaggerfallBot(commands.Bot):
         if not args or args[0].lower() not in ["on", "off"]:
             return False, 'Specify levitate setting: "on" or "off"'
         return True, None
+    
+    def validate_gravity_args(self, args):
+        """Validate gravity setting"""
+        if not args or not args[0].isdigit() or not (0 <= int(args[0]) <= 20):
+            return False, 'Set gravity level: 0–20 (0=low, 20=default)'
+        return True, None
 
     async def start_vote(self, message, vote_type):
         if self.voting_active:
@@ -372,6 +379,11 @@ class DaggerfallBot(commands.Bot):
             args = message.content.split()[1:] if len(message.content.split()) > 1 else []
             if not self.validate_levitate_args(args)[0]:
                 await message.channel.send(self.validate_levitate_args(args)[1])
+                return
+        elif vote_type == "gravity":
+            args = message.content.split()[1:] if len(message.content.split()) > 1 else []
+            if not self.validate_gravity_args(args)[0]:
+                await message.channel.send(self.validate_gravity_args(args)[1])
                 return
 
         logging.info(f"Starting vote for {vote_type}")
@@ -449,6 +461,11 @@ class DaggerfallBot(commands.Bot):
             await self.toggle_enemy_ai()
         elif self.current_vote_type == "exit":
             await self.exit_building()
+        elif self.current_vote_type == "gravity":
+            args = self.current_vote_message.content.split()[1:]
+            gravity_level = args[0] if args else "20"
+            await self.set_gravity(gravity_level)
+
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -584,6 +601,18 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send("Teleported outside of current building, or did nothing if already outside.")
+
+    async def set_gravity(self, gravity_level):
+        """Set gravity level (0–20)"""
+        logging.info(f"Executing gravity command with level: {gravity_level}")
+
+        self.send_console_command(f"set_grav {gravity_level}")
+
+        await asyncio.sleep(5)
+        
+        channel = self.connected_channels[0]
+        await channel.send(f'Gravity set to: {gravity_level}!')
+
 
     async def killall(self):
         """Kill all enemies"""
@@ -765,7 +794,7 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "🗡️More Daggerwalk Commands: "
-            "!weather • !levitate • !toggle_ai • !exit"
+            "!weather • !levitate • !toggle_ai • !exit • !gravity"
         )
         
         await channel.send(combined_message)
