@@ -284,10 +284,6 @@ class DaggerfallBot(commands.Bot):
             "killall": self.killall,
             "info": self.game_info,
             "more": self.more_commands,
-            # "weather": "",
-            # "levitate": "",
-            # "toggle_ai": "",
-            # "exit": ""
         }
 
         if command in command_map:
@@ -334,6 +330,12 @@ class DaggerfallBot(commands.Bot):
         if not args or args[0].lower() not in Config.WEATHER_TYPES_MAP:
             return False, f"Specify weather type: {', '.join(Config.WEATHER_TYPES_MAP.keys())}"
         return True, None
+    
+    def validate_levitate_args(self, args):
+        """Validate levitate selection"""
+        if not args or args[0].lower() not in ["on", "off"]:
+            return False, 'Specify "on" or "off"'
+        return True, None
 
     async def start_vote(self, message, vote_type):
         if self.voting_active:
@@ -360,6 +362,11 @@ class DaggerfallBot(commands.Bot):
             args = message.content.split()[1:] if len(message.content.split()) > 1 else []
             if not self.validate_weather_arg(args)[0]:
                 await message.channel.send(self.validate_weather_arg(args)[1])
+                return
+        elif vote_type == "levitate":
+            args = message.content.split()[1:] if len(message.content.split()) > 1 else []
+            if not self.validate_levitate_args(args)[0]:
+                await message.channel.send(self.validate_levitate_args(args)[1])
                 return
 
         logging.info(f"Starting vote for {vote_type}")
@@ -429,6 +436,10 @@ class DaggerfallBot(commands.Bot):
             args = self.current_vote_message.content.split()[1:]
             weather_choice = args[0] if args else "sunny"
             await self.weather(weather_choice)
+        elif self.current_vote_type == "levitate":
+            args = self.current_vote_message.content.split()[1:]
+            levitate_choice = args[0] if args else "off"
+            await self.levitate(levitate_choice)
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -530,6 +541,17 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send(f'Weather changed to: {weather_choice}!')
+
+    async def levitate(self, levitate_choice):
+        """Toggle levitatation on/off"""
+        logging.info(f"Executing levitate command with choice: {levitate_choice}")
+
+        self.send_console_command(f"levitate {levitate_choice}")
+
+        await asyncio.sleep(5)
+        
+        channel = self.connected_channels[0]
+        await channel.send(f'Levitation set to: {levitate_choice}!')
 
     async def killall(self):
         """Kill all enemies"""
