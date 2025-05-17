@@ -578,12 +578,13 @@ class DaggerfallBot(commands.Bot):
         """Teleport outside building/dungeon or do nothing"""
         logging.info("Executing exit command")
 
-        self.send_console_command("trans_out")
+        # self.send_console_command("trans_out")
+        self.admin_command('trans_out')
 
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        await channel.send("Teleported outside of building, or did nothing if already outside.")
+        await channel.send("Teleported outside of current building, or did nothing if already outside.")
 
     async def killall(self):
         """Kill all enemies"""
