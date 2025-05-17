@@ -630,15 +630,11 @@ class DaggerfallBot(commands.Bot):
             if not dlg:
                 return
 
-            for char in command:
-                if char == "_":
-                    dlg.type_keys("+-", pause=0.01)  # Shift + - = _
-                elif char == " ":
-                    dlg.type_keys("{SPACE}", pause=0.01)  # Send actual space
-                elif char.isupper():
-                    dlg.type_keys(f"+{char.lower()}", pause=0.01)  # Shift + lowercase = uppercase
-                else:
-                    dlg.type_keys(char, pause=0.01)  # Regular character
+            # Replace special characters
+            command = command.replace("_", "+-")  # Replace _ with Shift + -
+            command = command.replace(" ", "{SPACE}")  # Replace space with literal space key
+
+            dlg.type_keys(command, pause=0.01)  # Let pywinauto handle the whole string
 
         except Exception as e:
             logging.error(f"Console typing error: {e}")
