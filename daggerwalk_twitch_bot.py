@@ -96,23 +96,23 @@ class Config:
 def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
     """Send keyboard input to Daggerfall Unity window"""
     try:
+        # Create a fresh Application instance each time
         window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
                       if w.title == "Daggerfall Unity"), None)
-
+                      
         if not window:
             logging.warning("Game window not found")
             return
-
+            
+        # Force a completely new connection every time, with no caching
         app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
         dlg = app.window(handle=window._hWnd)
-
+        
         logging.info(f"Sending input: {key} ({repeat} times)")
         for _ in range(repeat):
-            # Replace underscores in full-string commands
-            safe_key = key.replace("_", "+-")
-            dlg.type_keys(safe_key, with_spaces=True, pause=0.01)
+            dlg.send_keystrokes(key)
             time.sleep(delay)
-
+            
     except Exception as e:
         logging.error(f"Input error: {e}")
 
@@ -610,11 +610,11 @@ class DaggerfallBot(commands.Bot):
         logging.info(f"Sending console command: {command}")
         send_game_input(GameKeys.CONSOLE.value)  # Open console
         time.sleep(0.5)
-        send_game_input(command)  # Send full command
+        send_game_input(command)  # Send command
         time.sleep(0.1)
-        send_game_input("{ENTER}")
+        send_game_input("{ENTER}")  # Send ENTER separately
         time.sleep(1)
-        send_game_input(GameKeys.CONSOLE.value)
+        send_game_input(GameKeys.CONSOLE.value)  # Close console
 
     @staticmethod
     async def load_json_async(file_path):
