@@ -447,6 +447,8 @@ class DaggerfallBot(commands.Bot):
             await self.levitate(levitate_choice)
         elif self.current_vote_type == "toggle_ai":
             await self.toggle_enemy_ai()
+        elif self.current_vote_type == "exit":
+            await self.exit_building()
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -561,7 +563,7 @@ class DaggerfallBot(commands.Bot):
         channel = self.connected_channels[0]
         await channel.send(f'Levitate set to: {levitate_choice}!')
 
-    async def toggle_enemy_ai(self, _=None):
+    async def toggle_enemy_ai(self):
         """Toggle enemy AI on/off"""
         logging.info("Executing toggle_enemy_ai command")
 
@@ -571,6 +573,17 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send("Toggled enemy AI!")
+
+    async def exit_building(self):
+        """Teleport outside building/dungeon or do nothing"""
+        logging.info("Executing exit command")
+
+        self.send_console_command("trans_out")
+
+        await asyncio.sleep(5)
+        
+        channel = self.connected_channels[0]
+        await channel.send("Teleported outside of building, or did nothing if already outside.")
 
     async def killall(self):
         """Kill all enemies"""
