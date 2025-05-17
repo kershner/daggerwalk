@@ -62,7 +62,7 @@ class Config:
         "snowy": 6,
     }
 
-    WEATHER_EMOJIS = {"Sunny": "☀️", "Clear": "🌙", "Cloudy": "☁️", "Foggy": "🌫️",
+    WEATHER_EMOJIS = {"Sunny": "☀️", "Clear": "🌙", "Overcast": "🌥️", "Cloudy": "☁️", "Foggy": "🌫️",
                         "Rainy": "🌧️", "Snowy": "🌨️", "Thunderstorm": "⛈️"}
     
     SEASON_EMOJIS = {"Winter": "☃️", "Spring": "🌸", "Summer": "🌻", "Autumn": "🍂"}
