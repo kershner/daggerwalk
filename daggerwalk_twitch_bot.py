@@ -579,7 +579,10 @@ class DaggerfallBot(commands.Bot):
         logging.info("Executing exit command")
 
         # self.send_console_command("trans_out")
-        self.admin_command('trans_out')
+        msg = {
+            'author': { 'name': 'daggerwalk' }
+        }
+        self.admin_command(None, msg, 'trans_out')
 
         await asyncio.sleep(5)
         
