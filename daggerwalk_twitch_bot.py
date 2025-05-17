@@ -1,3 +1,4 @@
+from pywinauto.keyboard import send_keys
 from datetime import datetime, timezone
 from twitchio.ext import commands
 from datetime import datetime
@@ -55,11 +56,10 @@ class Config:
         "sunny": 0,
         "cloudy": 1,
         "overcast": 2,
-        "foggy": 3,
-        "rainy": 4,
+        "fog": 3,
+        "rain": 4,
         "thunderstorm": 5,
-        "snowy": 6,
-        "blizzard": 7
+        "snow": 6,
     }
 
     _params = None
@@ -88,28 +88,41 @@ class Config:
         params = cls.load_params()
         return params.get("daggerwalk_api_key", "")
 
+def get_daggerfall_window():
+    """Return connected pywinauto window for Daggerfall Unity"""
+    window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
+                  if w.title == "Daggerfall Unity"), None)
+    if not window:
+        logging.warning("Game window not found")
+        return None
+    app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
+    return app.window(handle=window._hWnd)
+
 def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
     """Send keyboard input to Daggerfall Unity window"""
     try:
-        # Create a fresh Application instance each time
-        window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
-                      if w.title == "Daggerfall Unity"), None)
-                      
-        if not window:
-            logging.warning("Game window not found")
+        dlg = get_daggerfall_window()
+        if not dlg:
             return
-            
-        # Force a completely new connection every time, with no caching
-        app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
-        dlg = app.window(handle=window._hWnd)
-        
+
         logging.info(f"Sending input: {key} ({repeat} times)")
         for _ in range(repeat):
             dlg.send_keystrokes(key)
             time.sleep(delay)
-            
     except Exception as e:
         logging.error(f"Input error: {e}")
+
+def send_literal_text(text: str):
+    """Send literal text to Daggerfall Unity (e.g. console commands)"""
+    try:
+        dlg = get_daggerfall_window()
+        if not dlg:
+            return
+
+        logging.info(f"Typing literal text: {text}")
+        dlg.type_keys(text, with_spaces=True, pause=0.01, set_foreground=False)
+    except Exception as e:
+        logging.error(f"Text input error: {e}")
 
 def post_to_django(data, reset=False):
     """Post game state data to Django endpoint in background"""
@@ -318,8 +331,8 @@ class DaggerfallBot(commands.Bot):
         
     def validate_weather_arg(self, args):
         """Validate weather selection"""
-        if not args or args[0].lower() not in self.WEATHER_TYPES_MAP:
-            return False, f"Specify weather type: {', '.join(self.WEATHER_TYPES_MAP.keys())}"
+        if not args or args[0].lower() not in Config.WEATHER_TYPES_MAP:
+            return False, f"Specify weather type: {', '.join(Config.WEATHER_TYPES_MAP.keys())}"
         return True, None
 
     async def start_vote(self, message, vote_type):
@@ -413,6 +426,7 @@ class DaggerfallBot(commands.Bot):
                 song_choice = args[0] if args else "random"
                 await self.song(song_choice)
         elif self.current_vote_type == "weather":
+            args = self.current_vote_message.content.split()[1:]
             weather_choice = args[0] if args else "sunny"
             await self.weather(weather_choice)
 
@@ -510,12 +524,12 @@ class DaggerfallBot(commands.Bot):
         """Change in-game weather"""
         logging.info(f"Executing weather command with choice: {weather_choice}")
 
-        # self.send_console_command(f"song set_weather {weather_choice}")
+        self.send_console_command(f"set_weather {Config.WEATHER_TYPES_MAP.get(weather_choice)}")
 
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        # await channel.send('Weather changed!')
+        await channel.send(f'Weather changed to: {weather_choice}!')
 
     async def killall(self):
         """Kill all enemies"""
@@ -527,11 +541,29 @@ class DaggerfallBot(commands.Bot):
         logging.info(f"Sending console command: {command}")
         send_game_input(GameKeys.CONSOLE.value)  # Open console
         time.sleep(0.5)
-        send_game_input(command)  # Send command
+
+        try:
+            dlg = get_daggerfall_window()
+            if not dlg:
+                return
+
+            for char in command:
+                if char == "_":
+                    dlg.type_keys("+-", pause=0.01)  # Shift + - = _
+                elif char == " ":
+                    dlg.type_keys("{SPACE}", pause=0.01)  # Send actual space
+                elif char.isupper():
+                    dlg.type_keys(f"+{char.lower()}", pause=0.01)  # Shift + lowercase = uppercase
+                else:
+                    dlg.type_keys(char, pause=0.01)  # Regular character
+
+        except Exception as e:
+            logging.error(f"Console typing error: {e}")
+
         time.sleep(0.1)
-        send_game_input("{ENTER}")  # Send ENTER separately
+        send_game_input("{ENTER}")
         time.sleep(1)
-        send_game_input(GameKeys.CONSOLE.value)  # Close console
+        send_game_input(GameKeys.CONSOLE.value)
 
     @staticmethod
     async def load_json_async(file_path):
