@@ -1,5 +1,6 @@
 from pywinauto.keyboard import send_keys
 from datetime import datetime, timezone
+from twitchAPI.twitch import Twitch
 from twitchio.ext import commands
 from datetime import datetime
 import pygetwindow as gw
@@ -639,6 +640,32 @@ class DaggerfallBot(commands.Bot):
             logging.error(f"Error reading map data: {e}")
             return {}
 
+    async def update_stream_title(self, region: str, weather: str, time_str: str):
+        try:
+            # Determine time of day
+            hour = datetime.strptime(time_str, "%H:%M:%S").hour
+            if 6 <= hour < 12:
+                time_of_day = "morning"
+            elif 12 <= hour < 18:
+                time_of_day = "afternoon"
+            else:
+                time_of_day = "night"
+
+            # Build title
+            title = f"Walking through {region} on a {weather} {time_of_day}"
+
+            # Update Twitch title using Helix API
+            client_id, oauth_token = Config.get_oauth()
+            twitch = Twitch(client_id, oauth_token)
+            user_data = await twitch.get_users(logins=[Config.TWITCH_CHANNEL])
+            broadcaster_id = user_data['data'][0]['id']
+            await twitch.set_channel_information(broadcaster_id, title=title)
+
+            logging.info(f"Stream title updated to: {title}")
+        except Exception as e:
+            logging.error(f"Failed to update stream title: {e}")
+
+
     async def game_info(self):
         """Display game state information"""
         try:
@@ -736,6 +763,10 @@ class DaggerfallBot(commands.Bot):
             # Send message
             if self.connected_channels:
                 await self.connected_channels[0].send(status)
+
+            if date_str and ',' in date_str:
+                time_str = date_str.split(',')[-1].strip()  # e.g., "22:52:08"
+                await self.update_stream_title(region, weather, time_str)
                     
         except Exception as e:
             logging.error(f"Info error: {e}")
