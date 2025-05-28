@@ -1,6 +1,5 @@
 from pywinauto.keyboard import send_keys
 from datetime import datetime, timezone
-from twitchAPI.twitch import Twitch
 from twitchio.ext import commands
 from datetime import datetime
 import pygetwindow as gw
@@ -9,6 +8,7 @@ import pywinauto
 import aiofiles
 import requests
 import logging
+import aiohttp
 import asyncio
 import json
 import time
@@ -642,7 +642,6 @@ class DaggerfallBot(commands.Bot):
 
     async def update_stream_title(self, region: str, weather: str, time_str: str):
         try:
-            # Determine time of day
             hour = datetime.strptime(time_str, "%H:%M:%S").hour
             if 6 <= hour < 12:
                 time_of_day = "morning"
@@ -651,17 +650,42 @@ class DaggerfallBot(commands.Bot):
             else:
                 time_of_day = "night"
 
-            # Build title
-            title = f"Walking through {region} on a {weather} {time_of_day}"
+            title = f"Walking through {region} on a {weather.lower()} {time_of_day}"
 
-            # Update Twitch title using Helix API
-            client_id, oauth_token = Config.get_oauth()
-            twitch = Twitch(client_id, oauth_token)
-            user_data = await twitch.get_users(logins=[Config.TWITCH_CHANNEL])
-            broadcaster_id = user_data['data'][0]['id']
-            await twitch.set_channel_information(broadcaster_id, title=title)
+            client_id, oauth_token = Config.get_oauth()[:2]  # ignore client_secret
 
-            logging.info(f"Stream title updated to: {title}")
+            # Remove "oauth:" prefix if present
+            if oauth_token.startswith("oauth:"):
+                oauth_token = oauth_token[6:]
+
+            async with aiohttp.ClientSession() as session:
+                # Get broadcaster ID
+                async with session.get(
+                    "https://api.twitch.tv/helix/users",
+                    headers={
+                        "Client-ID": client_id,
+                        "Authorization": f"Bearer {oauth_token}",
+                    }
+                ) as resp:
+                    data = await resp.json()
+                    broadcaster_id = data["data"][0]["id"]
+
+                # Update stream title
+                async with session.patch(
+                    f"https://api.twitch.tv/helix/channels?broadcaster_id={broadcaster_id}",
+                    headers={
+                        "Client-ID": client_id,
+                        "Authorization": f"Bearer {oauth_token}",
+                        "Content-Type": "application/json"
+                    },
+                    json={"title": title}
+                ) as patch_resp:
+                    if patch_resp.status == 204:
+                        logging.info(f"Stream title updated to: {title}")
+                    else:
+                        err = await patch_resp.text()
+                        raise Exception(f"{patch_resp.status} - {err}")
+
         except Exception as e:
             logging.error(f"Failed to update stream title: {e}")
 
