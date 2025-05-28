@@ -762,7 +762,7 @@ class DaggerfallBot(commands.Bot):
             music_info = f"🎵{current_song} (Track {track_id})" if current_song and track_id is not None else ""
             
             # Build map link
-            map_link = f"🗺️Map: https://kershner.org/daggerwalk?region={region.replace(' ', '+')}" if region else ""
+            map_link = f"🗺️Map: https://kershner.org/daggerwalk"
             
             # Format location - now with POI emoji
             if in_ocean:
