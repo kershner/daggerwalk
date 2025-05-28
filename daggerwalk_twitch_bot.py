@@ -43,7 +43,7 @@ class Config:
     VOTING_DURATION = 30  # seconds
     AUTHORIZED_USERS = ["billcrystals", "daggerwalk", "daggerwalk_bot"]
     MAX_INPUT_REPEATS = 100
-    DJANGO_LOG_URL = 'https://www.kershner.org/daggerwalk/log/'
+    DJANGO_LOG_URL = 'https://kershner.org/daggerwalk/log/'
     
     ACTIVE_MODS = [
         "World of Daggerfall", "Interesting Eroded Terrains",
