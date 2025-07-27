@@ -55,7 +55,7 @@ class Config:
     ]
 
     WEATHER_TYPES_MAP = {
-        "sunny": 0,
+        "clear": 0,
         "cloudy": 1,
         "overcast": 2,
         "foggy": 3,
