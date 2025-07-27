@@ -1,3 +1,5 @@
+import subprocess
+from pywinauto.keyboard import send_keys
 from datetime import datetime, timezone
 from twitchio.ext import commands
 from datetime import datetime
@@ -7,7 +9,6 @@ import pywinauto
 import aiofiles
 import requests
 import logging
-import psutil
 import aiohttp
 import asyncio
 import json
@@ -229,26 +230,39 @@ class DaggerfallBot(commands.Bot):
             except Exception as e:
                 logging.error(f"Autosave error: {e}")
 
-    # Function to check if a process is running
-    def is_daggerfall_process_running():
-        process_name = "DaggerfallUnity.exe"
-        for proc in psutil.process_iter(["name"]):
-            if process_name.lower() in proc.info["name"].lower():
-                return True
-        return False
+    def is_daggerfall_running(self):
+        """Check if Daggerfall Unity process is running using built-in tasklist"""
+        try:
+            # logging.info("Checking running processes via tasklist...")
+            output = subprocess.check_output("tasklist", shell=True, text=True)
+            lines = output.strip().splitlines()
+            process_names = [line.split()[0] for line in lines[3:] if line]  # Skip header lines
+            return any("DaggerfallUnity.exe" == name for name in process_names)
+
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to run tasklist: {e}")
+            return False
+        except Exception as e:
+            logging.error(f"Unexpected error in is_daggerfall_running: {e}")
+            return False
 
     async def crash_monitor(self):
         """Monitors for Daggerfall Unity crash and reboots if detected"""
-        logging.info("Starting crash monitor")
+        logging.info("Starting crash monitor loop...")
 
         while True:
             await asyncio.sleep(10)
-            if not self.is_daggerfall_process_running():
-                logging.error("Daggerfall Unity process not found — assuming crash.")
+            # logging.info("Checking if Daggerfall Unity is running...")
+
+            if not self.is_daggerfall_running():
+                logging.error("Daggerfall Unity process not found — assuming crash")
                 if self.connected_channels:
-                    await self.connected_channels[0].send("⚠️ Daggerfall Unity has crashed! Rebooting system, back in a bit...")
+                    await self.connected_channels[0].send(
+                        "⚠️ Daggerfall Unity has crashed! Rebooting system, back in a bit..."
+                    )
                 os.system("shutdown /r /t 5")
                 break
+
 
     async def event_message(self, message):
         """Handle incoming chat messages and commands"""
