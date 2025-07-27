@@ -3,8 +3,6 @@ import time
 import psutil
 import logging
 import os
-import signal
-import sys
 import pyautogui
 import pygetwindow as gw
 
@@ -43,16 +41,6 @@ def terminate_process(process_name):
                 logging.warning(f"Force killing {process_name}...")
                 proc.kill()
 
-def minimize_daggerfall():
-    logging.info("Moving Daggerfall Unity window off-screen...")
-    try:
-        window = gw.getWindowsWithTitle("Daggerfall Unity")[0]  # Get the window
-        window.moveTo(-2000, 0)  # Move it off-screen
-        logging.info("Daggerfall Unity window moved successfully.")
-    except IndexError:
-        logging.warning("Could not find Daggerfall Unity window to move.")
-
-
 def start_daggerfall():
     if is_process_running("DaggerfallUnity.exe"):
         logging.info("Daggerfall Unity is already running.")
@@ -64,7 +52,7 @@ def start_daggerfall():
             DAGGERFALL_EXE,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        time.sleep(20)  # Wait for the game to start
+        time.sleep(30)  # Wait for the game to start
 
         logging.info("Changing Daggerfall Unity audio output device...")
         set_daggerfall_audio_device()
@@ -116,12 +104,10 @@ def start_daggerfall():
 
         pyautogui.press("`")  # Close the console
 
-        time.sleep(1)  # 
+        time.sleep(1) 
         logging.info("Pressing \ to enable auto-walk...")
         pyautogui.press("\\")
         time.sleep(2)  # Give it a moment before moving the window
-
-        # minimize_daggerfall()
 
     except Exception as e:
         logging.error(f"Failed to start Daggerfall Unity: {e}")
@@ -212,61 +198,6 @@ def start_bot_monitor():
         cwd=os.path.dirname(__file__)
     )
 
-def cleanup_and_exit(signum, frame):
-    logging.info("Stopping DaggerWalk automation... (Received Ctrl+C or SIGTERM)")
-
-    # Restore and focus Daggerfall Unity before quicksaving
-    try:
-        windows = gw.getWindowsWithTitle("Daggerfall Unity")
-        if windows:
-            window = windows[0]
-            logging.info("Restoring and bringing Daggerfall Unity to foreground for quicksave...")
-            
-            # Add small delays between operations and wrap each in try/except
-            try:
-                window.restore()
-                time.sleep(0.5)
-            except Exception as e:
-                logging.warning(f"Failed to restore window: {e}")
-            
-            # Try multiple methods to activate the window
-            try:
-                # Method 1: Direct activation
-                window.activate()
-                time.sleep(0.5)
-            except Exception as e:
-                logging.warning(f"Direct activation failed: {e}")
-                try:
-                    # Method 2: Alternative activation using Win32GUI
-                    import win32gui
-                    win32gui.SetForegroundWindow(window._hWnd)
-                    time.sleep(0.5)
-                except Exception as e:
-                    logging.warning(f"Win32GUI activation failed: {e}")
-            
-            # Proceed with quicksave regardless of activation success
-            logging.info("Performing quicksave in Daggerfall Unity (F9)...")
-            pyautogui.press("f9")
-            time.sleep(2)
-        else:
-            logging.warning("Daggerfall Unity window not found. Skipping quicksave.")
-    except Exception as e:
-        logging.error(f"Error during cleanup: {e}")
-        
-    # Stop processes regardless of quicksave success
-    try:
-        terminate_process("DaggerfallUnity.exe")
-        terminate_process("obs64.exe")
-    except Exception as e:
-        logging.error(f"Error terminating processes: {e}")
-
-    logging.info("All processes terminated. Exiting script.")
-    sys.exit(0)
-
-# Register signal handlers for graceful shutdown
-signal.signal(signal.SIGINT, cleanup_and_exit)
-signal.signal(signal.SIGTERM, cleanup_and_exit)
-
 # Main execution loop
 if __name__ == "__main__":
     logging.info("=== Starting DaggerWalk Automation ===")
@@ -276,9 +207,3 @@ if __name__ == "__main__":
     start_bot_monitor()
     
     logging.info("DaggerWalk is now running! (Press Ctrl+C to stop)")
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        cleanup_and_exit(None, None)

@@ -1,3 +1,4 @@
+import subprocess
 from pywinauto.keyboard import send_keys
 from datetime import datetime, timezone
 from twitchio.ext import commands
@@ -192,6 +193,7 @@ class DaggerfallBot(commands.Bot):
         logging.info(f"Bot online as {self.nick}")
         self.autosave_task = asyncio.create_task(self.autosave_loop())
         self.message_task = asyncio.create_task(self.message_scheduler())
+        self.crash_monitor_task = asyncio.create_task(self.crash_monitor())
 
     async def message_scheduler(self):
         """Schedules periodic info (5min) and help (20min) messages"""
@@ -227,6 +229,28 @@ class DaggerfallBot(commands.Bot):
                 logging.info(f"Auto-saved at {self.last_autosave}")
             except Exception as e:
                 logging.error(f"Autosave error: {e}")
+
+    def is_daggerfall_running():
+        """Check if Daggerfall Unity process is running using built-in tasklist"""
+        try:
+            output = subprocess.check_output("tasklist", shell=True, text=True)
+            return "DaggerfallUnity.exe" in output
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Failed to run tasklist: {e}")
+            return False
+
+    async def crash_monitor(self):
+        """Monitors for Daggerfall Unity crash and reboots if detected"""
+        logging.info("Starting crash monitor")
+
+        while True:
+            await asyncio.sleep(10)
+            if not self.is_daggerfall_running():
+                logging.error("Daggerfall Unity process not found — assuming crash.")
+                if self.connected_channels:
+                    await self.connected_channels[0].send("⚠️ Daggerfall Unity has crashed! Rebooting system, back in a bit...")
+                os.system("shutdown /r /t 5")
+                break
 
     async def event_message(self, message):
         """Handle incoming chat messages and commands"""
