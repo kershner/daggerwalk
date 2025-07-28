@@ -304,6 +304,7 @@ class DaggerfallBot(commands.Bot):
             "use": lambda: self.send_movement(GameKeys.USE),
             "map": self.toggle_map,
             "selfie": self.toggle_selfie,
+            "bighop": self.bighop,
             "shotgun": self.use_shotgun,
             "save": self.save_game,
             "load": lambda: self.admin_command(message, self.load_game),
@@ -524,6 +525,17 @@ class DaggerfallBot(commands.Bot):
         send_game_input(GameKeys.SELFIE.value)
         time.sleep(8)
         send_game_input(GameKeys.SELFIE.value)
+
+
+    async def bighop(self):
+        """Shortcut for common pattern to get unstuck"""
+        logging.info("Executing BIGHOP command")
+        self.send_movement(GameKeys.BACK, repeat=100)
+        await asyncio.sleep(Config.CHAT_DELAY)
+        self.send_movement(GameKeys.WALK)
+        await asyncio.sleep(Config.CHAT_DELAY)
+        self.send_movement(GameKeys.JUMP)
+
 
     async def use_shotgun(self):
         """Use shotgun weapon by raising weapon, firing, and then lowering it"""
