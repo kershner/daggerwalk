@@ -52,12 +52,10 @@ def start_daggerfall():
             DAGGERFALL_EXE,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        time.sleep(25)  # Wait for the game to start
+        time.sleep(30)  # Wait for the game to start
 
         logging.info("Changing Daggerfall Unity audio output device...")
         set_daggerfall_audio_device()
-        
-        time.sleep(10)
 
         logging.info("Skipping intro video...")
         pyautogui.press("space")  # Press Space to skip intro
