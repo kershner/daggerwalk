@@ -530,11 +530,9 @@ class DaggerfallBot(commands.Bot):
     async def bighop(self):
         """Shortcut for common pattern to get unstuck"""
         logging.info("Executing BIGHOP command")
-        self.send_movement(GameKeys.BACK, repeat=100)
-        await asyncio.sleep(Config.CHAT_DELAY)
-        self.send_movement(GameKeys.WALK)
-        await asyncio.sleep(Config.CHAT_DELAY)
-        self.send_movement(GameKeys.JUMP)
+        send_game_input(GameKeys.BACK.value, repeat=100)
+        send_game_input(GameKeys.WALK.value)
+        send_game_input(GameKeys.JUMP.value)
 
 
     async def use_shotgun(self):
