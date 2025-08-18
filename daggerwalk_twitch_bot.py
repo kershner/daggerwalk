@@ -263,7 +263,16 @@ class DaggerfallBot(commands.Bot):
                 os.system("shutdown /r /t 5")
                 break
 
-
+    async def log_chat_command(self, username, command, args):
+        """Append chat commands to a local log file"""
+        timestamp = datetime.now(timezone.utc).isoformat()
+        entry = f"{timestamp} | {username} | {command} | {' '.join(args)}\n"
+        try:
+            async with aiofiles.open("chat_commands_log.txt", mode="a") as f:
+                await f.write(entry)
+        except Exception as e:
+            logging.error(f"Failed to log chat command: {e}")
+    
     async def event_message(self, message):
         """Handle incoming chat messages and commands"""
         if not message.author:
@@ -272,11 +281,20 @@ class DaggerfallBot(commands.Bot):
         logging.info(f"Chat: {message.author.name}: {message.content}")
         
         parts = message.content.split()
-        if not parts[0].startswith("!"):
+        if not parts or not parts[0].startswith("!"):
             return
             
         command = parts[0][1:].lower()  # Remove ! prefix
         args = parts[1:] if len(parts) > 1 else []
+
+        # Log the command asynchronously to a local file
+        try:
+            ts = datetime.now(timezone.utc).isoformat()
+            logline = f"{ts} | {message.author.name} | {command} | {' '.join(args)}\n"
+            async with aiofiles.open("chat_commands_log.txt", mode="a") as f:
+                await f.write(logline)
+        except Exception as e:
+            logging.error(f"Failed to log chat command: {e}")
 
         # Handle voting commands
         if command in self.votable_commands:
