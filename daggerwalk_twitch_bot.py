@@ -138,8 +138,15 @@ def post_to_django(data, reset=False):
             "weather": data.get('weather', 'Unknown'),
             "season": data.get('season', 'Unknown'),
             "currentSong": data.get('currentSong', None),
-            "reset": reset
+            "reset": reset,
+            "chat_logs": []
         }
+
+        # Read chat command logs and include in payload
+        log_file = "chat_commands_log.txt"
+        if os.path.exists(log_file):
+            with open(log_file, "r") as f:
+                payload["chat_logs"] = f.read().strip().splitlines()
 
         logging.info(f"Posting to Django: {Config.DJANGO_LOG_URL}")
 
@@ -151,11 +158,13 @@ def post_to_django(data, reset=False):
             Config.DJANGO_LOG_URL,
             json=payload,
             headers=headers,
-            timeout=5
+            timeout=15
         )
         
         if response.status_code == 201:
             logging.info(f"Successfully posted to Django. Response: {response.json()}")
+            # Clear chat log file after success
+            open(log_file, "w").close()
         else:
             logging.warning(f"Django post returned non-201 status: {response.status_code}. Response: {response.text}")
 
