@@ -876,11 +876,14 @@ class DaggerfallBot(commands.Bot):
             base = Config.DJANGO_BASE_API_URL
 
             logs = requests.get(f"{base}/logs/?limit=2&ordering=-id", timeout=5).json().get("results", [])
-            if len(logs) < 2: 
+            if len(logs) < 2:
                 return
-            pos1 = (logs[0].get("world_x"), logs[0].get("world_z"))
-            pos2 = (logs[1].get("world_x"), logs[1].get("world_z"))
-            if pos1 != pos2: 
+
+            x1, y1 = logs[0].get("world_x"), logs[0].get("world_y")
+            x2, y2 = logs[1].get("world_x"), logs[1].get("world_y")
+
+            # stuck if either X OR Y stayed the same
+            if x1 != x2 and y1 != y2:
                 return
 
             cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id", timeout=5).json().get("results", [])
@@ -888,11 +891,12 @@ class DaggerfallBot(commands.Bot):
             last_args = cmds[0].get("args", "").lower() if cmds else ""
 
             if last_cmd in ["stop", "walk", "back", "forward"]:
-                # Stopped by a viewer
+                logging.info(f"Stuck check: last command {last_cmd}, skipping recovery.")
                 return
-            
+
             channel = self.connected_channels[0]
-            await channel.send("The Walker might be stuck, attempting to free them...")    
+            await channel.send("The Walker might be stuck, attempting to free them...")
+
             if last_cmd == "bighop":
                 await channel.send("!left 50")
             elif last_cmd == "left" and last_args.strip() == "50":
