@@ -898,11 +898,15 @@ class DaggerfallBot(commands.Bot):
             await channel.send("The Walker might be stuck, attempting to free them...")
 
             if last_cmd == "bighop":
+                # Send to chat (log) + actually run the command
                 await channel.send("!left 50")
+                await self.send_movement(GameKeys.LEFT, args=["50"])
             elif last_cmd == "left" and last_args.strip() == "50":
                 return
             else:
+                # Send to chat (log) + actually run the command
                 await channel.send("!bighop")
+                await self.bighop()
 
         except Exception as e:
             logging.error(f"check_if_bot_is_stuck error: {e}")
