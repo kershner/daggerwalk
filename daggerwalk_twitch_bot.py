@@ -46,7 +46,7 @@ class Config:
     AUTHORIZED_USERS = ["billcrystals", "daggerwalk", "daggerwalk_bot"]
     MAX_INPUT_REPEATS = 100
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
-    DJANGO_LOG_URL = f"{DJANGO_BASE_API_URL}/log/"
+    DJANGO_LOG_URL = "https://kershner.org/daggerwalk/log/"
     
     ACTIVE_MODS = [
         "World of Daggerfall", "Interesting Eroded Terrains",
