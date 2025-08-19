@@ -887,7 +887,7 @@ class DaggerfallBot(commands.Bot):
             last_cmd = cmds[0]["command"].lower() if cmds else None
             last_args = cmds[0].get("args", "").lower() if cmds else ""
 
-            if last_cmd == "stop":
+            if last_cmd in ["stop", "walk", "back", "forward"]:
                 # Stopped by a viewer
                 return
             
