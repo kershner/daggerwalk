@@ -904,11 +904,19 @@ class DaggerfallBot(commands.Bot):
             if pos1 != pos2:
                 return
 
+            # get last stop and walk (if API supports filtering by command)
+            stop_cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id&command=stop", timeout=5).json().get("results", [])
+            walk_cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id&command=walk", timeout=5).json().get("results", [])
+            stop_id = stop_cmds[0]["id"] if stop_cmds else 0
+            walk_id = walk_cmds[0]["id"] if walk_cmds else 0
+
+            # if last stop is newer than last walk, assume intentional stop
+            if stop_id > walk_id:
+                return
+
+            # still grab most recent command overall (to handle bighop case)
             cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id", timeout=5).json().get("results", [])
             last_cmd = cmds[0]["command"].lower() if cmds else None
-
-            if last_cmd in ["stop", "walk", "back", "forward"]:
-                return
 
             if not self.connected_channels:
                 return
