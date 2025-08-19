@@ -45,7 +45,8 @@ class Config:
     VOTING_DURATION = 30  # seconds
     AUTHORIZED_USERS = ["billcrystals", "daggerwalk", "daggerwalk_bot"]
     MAX_INPUT_REPEATS = 100
-    DJANGO_LOG_URL = 'https://kershner.org/daggerwalk/log/'
+    DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
+    DJANGO_LOG_URL = f"{DJANGO_BASE_API_URL}/log/"
     
     ACTIVE_MODS = [
         "World of Daggerfall", "Interesting Eroded Terrains",
@@ -867,6 +868,39 @@ class DaggerfallBot(commands.Bot):
                     
         except Exception as e:
             logging.error(f"Info error: {e}")
+
+        await self.check_if_bot_is_stuck()
+
+    async def check_if_bot_is_stuck(self):
+        try:
+            base = Config.DJANGO_BASE_API_URL
+
+            logs = requests.get(f"{base}/logs/?limit=2&ordering=-id", timeout=5).json().get("results", [])
+            if len(logs) < 2: 
+                return
+            pos1 = (logs[0].get("world_x"), logs[0].get("world_z"))
+            pos2 = (logs[1].get("world_x"), logs[1].get("world_z"))
+            if pos1 != pos2: 
+                return
+
+            cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id", timeout=5).json().get("results", [])
+            last_cmd = cmds[0]["command"].lower() if cmds else None
+            last_args = cmds[0].get("args", "").lower() if cmds else ""
+
+            channel = self.connected_channels[0]
+            await channel.send("The Walker might be stuck, attempting to free them...")
+
+            if last_cmd == "stop":
+                return
+            elif last_cmd == "bighop":
+                await channel.send("!left 50")
+            elif last_cmd == "left" and last_args.strip() == "50":
+                return
+            else:
+                await channel.send("!bighop")
+
+        except Exception as e:
+            logging.error(f"check_if_bot_is_stuck error: {e}")
 
     async def help(self):
         """Display available commands"""
