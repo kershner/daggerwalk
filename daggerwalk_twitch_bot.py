@@ -887,12 +887,13 @@ class DaggerfallBot(commands.Bot):
             last_cmd = cmds[0]["command"].lower() if cmds else None
             last_args = cmds[0].get("args", "").lower() if cmds else ""
 
-            channel = self.connected_channels[0]
-            await channel.send("The Walker might be stuck, attempting to free them...")
-
             if last_cmd == "stop":
+                # Stopped by a viewer
                 return
-            elif last_cmd == "bighop":
+            
+            channel = self.connected_channels[0]
+            await channel.send("The Walker might be stuck, attempting to free them...")    
+            if last_cmd == "bighop":
                 await channel.send("!left 50")
             elif last_cmd == "left" and last_args.strip() == "50":
                 return
