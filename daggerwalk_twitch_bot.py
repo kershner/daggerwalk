@@ -1,16 +1,16 @@
-import subprocess
+from datetime import datetime, timedelta, timezone
 from pywinauto.keyboard import send_keys
-from datetime import datetime, timezone
 from twitchio.ext import commands
-from datetime import datetime
 import pygetwindow as gw
 from enum import Enum
+import subprocess
 import pywinauto
 import aiofiles
 import requests
 import logging
 import aiohttp
 import asyncio
+import pytz
 import json
 import time
 import os
@@ -865,50 +865,68 @@ class DaggerfallBot(commands.Bot):
             if date_str and ',' in date_str:
                 time_str = date_str.split(',')[-1].strip()  # e.g., "22:52:08"
                 await self.update_stream_title(region, weather, time_str)
-                    
+
         except Exception as e:
             logging.error(f"Info error: {e}")
 
         await self.check_if_bot_is_stuck()
+        await self.send_shutdown_warning()
+
+    async def send_shutdown_warning(self):
+        """Send a one-time nightly shutdown warning about 10 minutes before midnight EST."""
+        if not self.connected_channels:
+            return  # not connected yet
+
+        est = pytz.timezone("US/Eastern")
+        now = datetime.now(est)
+        midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        minutes_until = int((midnight - now).total_seconds() // 60)
+
+        if 0 < minutes_until <= 10:
+            last_notice = getattr(self, "_last_shutdown_notice_date", None)
+            if last_notice != now.date():
+                self._last_shutdown_notice_date = now.date()
+                channel = self.connected_channels[0]
+                await channel.send(
+                    f"🛌 The Walker will rest for the night in {minutes_until} minutes, "
+                    "at midnight EST. They'll be back in the morning!"
+                )
 
     async def check_if_bot_is_stuck(self):
         try:
             base = Config.DJANGO_BASE_API_URL
 
             logs = requests.get(f"{base}/logs/?limit=2&ordering=-id", timeout=5).json().get("results", [])
-            if len(logs) < 2: 
+            if len(logs) < 2:
                 return
-
-            x1, y1 = logs[0].get("world_x"), logs[0].get("world_y")
-            x2, y2 = logs[1].get("world_x"), logs[1].get("world_y")
-
-            # stuck only if BOTH X and Y stayed the same
-            if x1 != x2 or y1 != y2: 
+            pos1 = (logs[0].get("world_x"), logs[0].get("world_y"))
+            pos2 = (logs[1].get("world_x"), logs[1].get("world_y"))
+            if pos1 != pos2:
                 return
 
             cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id", timeout=5).json().get("results", [])
             last_cmd = cmds[0]["command"].lower() if cmds else None
-            last_args = cmds[0].get("args", "").lower() if cmds else ""
 
             if last_cmd in ["stop", "walk", "back", "forward"]:
-                # Stopped by a viewer
+                return
+
+            if not self.connected_channels:
                 return
             
             channel = self.connected_channels[0]
-            await channel.send("The Walker might be stuck, attempting to free them...")    
+            await channel.send("The Walker might be stuck, attempting to free them...")
 
             if last_cmd == "bighop":
+                await self.log_chat_command(Config.BOT_USERNAME, "left", ["50"])
                 await channel.send("!left 50")
                 await self.send_movement(GameKeys.LEFT, args=["50"])
-            elif last_cmd == "left" and last_args.strip() == "50":
-                return
             else:
+                await self.log_chat_command(Config.BOT_USERNAME, "bighop", [])
                 await channel.send("!bighop")
                 await self.bighop()
 
         except Exception as e:
             logging.error(f"check_if_bot_is_stuck error: {e}")
-
 
     async def help(self):
         """Display available commands"""
