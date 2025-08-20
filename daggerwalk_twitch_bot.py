@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from pywinauto.keyboard import send_keys
 from twitchio.ext import commands
 import pygetwindow as gw
@@ -897,10 +897,12 @@ class DaggerfallBot(commands.Bot):
             base = Config.DJANGO_BASE_API_URL
 
             logs = requests.get(f"{base}/logs/?limit=2&ordering=-id", timeout=5).json().get("results", [])
+            
             if len(logs) < 2:
                 return
-            pos1 = (logs[0].get("world_x"), logs[0].get("world_y"))
-            pos2 = (logs[1].get("world_x"), logs[1].get("world_y"))
+
+            pos1 = (logs[0].get("world_x"), logs[0].get("world_z"))
+            pos2 = (logs[1].get("world_x"), logs[1].get("world_z"))
             if pos1 != pos2:
                 return
 
@@ -910,9 +912,14 @@ class DaggerfallBot(commands.Bot):
             stop_id = stop_cmds[0]["id"] if stop_cmds else 0
             walk_id = walk_cmds[0]["id"] if walk_cmds else 0
 
-            # if last stop is newer than last walk, assume intentional stop
-            if stop_id > walk_id:
-                return
+            # only consider stop newer than walk if the stop is from today
+            if stop_cmds:
+                stop_created = stop_cmds[0].get("created") or stop_cmds[0].get("timestamp")
+                if stop_created:
+                    # handle ISO8601 with optional 'Z'
+                    stop_time = datetime.fromisoformat(stop_created.replace("Z", "+00:00"))
+                    if stop_time.date() == date.today() and stop_id > walk_id:
+                        return
 
             # still grab most recent command overall (to handle bighop case)
             cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id", timeout=5).json().get("results", [])
