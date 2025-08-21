@@ -893,6 +893,10 @@ class DaggerfallBot(commands.Bot):
                 )
 
     async def check_if_bot_is_stuck(self):
+        now = datetime.now().time()
+        if now.hour == 0 and now.minute < 10:  # skip first 10 minutes after midnight
+            return
+        
         try:
             base = Config.DJANGO_BASE_API_URL
 
