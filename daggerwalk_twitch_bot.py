@@ -893,8 +893,12 @@ class DaggerfallBot(commands.Bot):
                 )
 
     async def check_if_bot_is_stuck(self):
-        now = datetime.now().time()
-        if now.hour == 0 and now.minute < 10:  # skip first 10 minutes after midnight
+        est = pytz.timezone("US/Eastern")
+        now = datetime.now(est).time()
+
+        # Skip the first 10 minutes after midnight and 9 AM Eastern (handles DST automatically)
+        if ((now.hour == 0 and now.minute < 10) or
+            (now.hour == 9 and now.minute < 10)):
             return
         
         try:
