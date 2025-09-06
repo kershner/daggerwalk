@@ -694,25 +694,45 @@ class DaggerfallBot(commands.Bot):
         await channel.send(f'Gravity set to: {gravity_level}!')
 
     async def playvid(self, idx_str: str):
-        """Play an FMV: playvid anim00XX.vid (waits 10s, then closes console)."""
-        wait_seconds = 10
-        
+        """Play an FMV: playvid anim00XX.vid, waits based on per-video durations."""
         try:
             n = int(idx_str)
             vid = f"anim00{n:02d}.vid"
             logging.info(f"Executing playvid for {vid}")
 
-            # Start the video
+            # Map of known durations (fill these in as you measure them)
+            durations = {
+                0: 45,
+                1: 14,
+                2: 6,
+                3: 15,
+                4: 10,
+                5: 46,
+                6: 18,
+                7: 16,
+                8: 20,
+                9: 20,
+                10: 15,
+                11: 6,
+                12: 15,
+                13: 13,
+                14: 17,
+                15: 22,
+            }
+
+            # Start video
             self.send_console_command(f"playvid {vid}")
 
-            # Wait for video to play (tweak this number as needed)
-            await asyncio.sleep(wait_seconds)
+            # Look up duration (default 10s if not found)
+            secs = durations.get(n, 10)
+            await asyncio.sleep(secs)
 
-            # Close console after video
+            # Close console after playback
+            send_game_input(GameKeys.ESC.value)
             send_game_input(GameKeys.CONSOLE.value)
 
             if self.connected_channels:
-                await self.connected_channels[0].send(f"Finished playing {vid}")
+                await self.connected_channels[0].send(f"Finished playing {vid} ({secs}s)")
         except Exception as e:
             logging.error(f"playvid error: {e}")
             if self.connected_channels:
