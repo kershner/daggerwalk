@@ -729,10 +729,8 @@ class DaggerfallBot(commands.Bot):
 
             # Close console after playback
             send_game_input(GameKeys.ESC.value)
+            send_game_input(GameKeys.ESC.value)
             send_game_input(GameKeys.CONSOLE.value)
-
-            if self.connected_channels:
-                await self.connected_channels[0].send(f"Finished playing {vid} ({secs}s)")
         except Exception as e:
             logging.error(f"playvid error: {e}")
             if self.connected_channels:
