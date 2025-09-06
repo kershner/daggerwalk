@@ -198,7 +198,7 @@ class DaggerfallBot(commands.Bot):
             "toggle_ai": "toggle enemy AI",
             "exit": "teleport out of the current building",
             "gravity": "set gravity level",
-            "playvid": "play an in-game video (anim00XX.vid)",
+            "playvid": "play an in-game video",
         }
 
     async def event_ready(self):
@@ -694,39 +694,25 @@ class DaggerfallBot(commands.Bot):
         await channel.send(f'Gravity set to: {gravity_level}!')
 
     async def playvid(self, idx_str: str):
-        """Play an FMV: playvid anim00XX.vid (no hardcoded wait)."""
+        """Play an FMV: playvid anim00XX.vid (waits 10s, then closes console)."""
+        wait_seconds = 10
+        
         try:
             n = int(idx_str)
             vid = f"anim00{n:02d}.vid"
             logging.info(f"Executing playvid for {vid}")
 
-            # Use the existing console helper (opens `, sends command, ENTER, then closes `).
-            # This keeps the console closed immediately after issuing the command.
+            # Start the video
             self.send_console_command(f"playvid {vid}")
 
-            # Optional: lightweight post-check to ensure console isn't left open if DFU re-opens it.
-            # We don't use fixed waits; we try a few quick taps spaced out by the event loop.
-            async def ensure_console_closed():
-                try:
-                    # a few gentle checks over ~3 seconds total without blocking the bot
-                    for _ in range(6):
-                        # Send a backtick only if we *suspect* it's open: heuristic—type a benign char and undo.
-                        # Minimal side effect approach: send ESC (safe) then a brief backtick tap pair to land closed.
-                        send_game_input("{ESC}")
-                        time.sleep(0.05)
-                        # Toggle twice quickly → final state = closed regardless of current state.
-                        send_game_input(GameKeys.CONSOLE.value)  # toggle
-                        time.sleep(0.05)
-                        send_game_input(GameKeys.CONSOLE.value)  # toggle back → closed
-                        await asyncio.sleep(0.5)
-                except Exception as e:
-                    logging.error(f"ensure_console_closed error: {e}")
+            # Wait for video to play (tweak this number as needed)
+            await asyncio.sleep(wait_seconds)
 
-            # Fire-and-forget cleanup; avoids waiting on unknown video duration.
-            asyncio.create_task(ensure_console_closed())
+            # Close console after video
+            send_game_input(GameKeys.CONSOLE.value)
 
             if self.connected_channels:
-                await self.connected_channels[0].send(f"Playing {vid}")
+                await self.connected_channels[0].send(f"Finished playing {vid}")
         except Exception as e:
             logging.error(f"playvid error: {e}")
             if self.connected_channels:
