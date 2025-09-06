@@ -1036,7 +1036,7 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "🗡️More Daggerwalk Commands: "
-            "!weather • !levitate • !toggle_ai • !exit • !gravity • !playvid <0-15>"
+            "!weather • !levitate • !toggle_ai • !exit • !gravity • !playvid"
         )
         
         await channel.send(combined_message)
