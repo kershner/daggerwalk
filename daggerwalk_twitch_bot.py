@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone, date
+from email import message
 from pywinauto.keyboard import send_keys
 from twitchio.ext import commands
 import pygetwindow as gw
@@ -196,7 +197,8 @@ class DaggerfallBot(commands.Bot):
             "levitate": "start or stop levitating",
             "toggle_ai": "toggle enemy AI",
             "exit": "teleport out of the current building",
-            "gravity": "set gravity level"
+            "gravity": "set gravity level",
+            "playvid": "play an in-game video (anim00XX.vid)",
         }
 
     async def event_ready(self):
@@ -401,6 +403,14 @@ class DaggerfallBot(commands.Bot):
         if not args or not args[0].isdigit() or not (0 <= int(args[0]) <= 20):
             return False, 'Set gravity level: 0–20 (0=low, 20=default)'
         return True, None
+    
+    def validate_playvid_args(self, args):
+        if not args or not args[0].isdigit():
+            return False, "Usage: !playvid <0–15>"
+        n = int(args[0])
+        if 0 <= n <= 15:
+            return True, None
+        return False, "Usage: !playvid <0–15>"
 
     async def start_vote(self, message, vote_type):
         if self.voting_active:
@@ -437,6 +447,12 @@ class DaggerfallBot(commands.Bot):
             args = message.content.split()[1:] if len(message.content.split()) > 1 else []
             if not self.validate_gravity_args(args)[0]:
                 await message.channel.send(self.validate_gravity_args(args)[1])
+                return
+        elif vote_type == "playvid":
+            args = message.content.split()[1:] if len(message.content.split()) > 1 else []
+            ok, msg = self.validate_playvid_args(args)
+            if not ok:
+                await message.channel.send(msg)
                 return
 
         logging.info(f"Starting vote for {vote_type}")
@@ -518,7 +534,9 @@ class DaggerfallBot(commands.Bot):
             args = self.current_vote_message.content.split()[1:]
             gravity_level = args[0] if args else "20"
             await self.set_gravity(gravity_level)
-
+        elif self.current_vote_type == "playvid":
+            args = self.current_vote_message.content.split()[1:]
+            await self.playvid(args[0])
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -674,6 +692,45 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send(f'Gravity set to: {gravity_level}!')
+
+    async def playvid(self, idx_str: str):
+        """Play an FMV: playvid anim00XX.vid (no hardcoded wait)."""
+        try:
+            n = int(idx_str)
+            vid = f"anim00{n:02d}.vid"
+            logging.info(f"Executing playvid for {vid}")
+
+            # Use the existing console helper (opens `, sends command, ENTER, then closes `).
+            # This keeps the console closed immediately after issuing the command.
+            self.send_console_command(f"playvid {vid}")
+
+            # Optional: lightweight post-check to ensure console isn't left open if DFU re-opens it.
+            # We don't use fixed waits; we try a few quick taps spaced out by the event loop.
+            async def ensure_console_closed():
+                try:
+                    # a few gentle checks over ~3 seconds total without blocking the bot
+                    for _ in range(6):
+                        # Send a backtick only if we *suspect* it's open: heuristic—type a benign char and undo.
+                        # Minimal side effect approach: send ESC (safe) then a brief backtick tap pair to land closed.
+                        send_game_input("{ESC}")
+                        time.sleep(0.05)
+                        # Toggle twice quickly → final state = closed regardless of current state.
+                        send_game_input(GameKeys.CONSOLE.value)  # toggle
+                        time.sleep(0.05)
+                        send_game_input(GameKeys.CONSOLE.value)  # toggle back → closed
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    logging.error(f"ensure_console_closed error: {e}")
+
+            # Fire-and-forget cleanup; avoids waiting on unknown video duration.
+            asyncio.create_task(ensure_console_closed())
+
+            if self.connected_channels:
+                await self.connected_channels[0].send(f"Playing {vid}")
+        except Exception as e:
+            logging.error(f"playvid error: {e}")
+            if self.connected_channels:
+                await self.connected_channels[0].send("Failed to play that video.")
 
     async def killall(self):
         """Kill all enemies"""
