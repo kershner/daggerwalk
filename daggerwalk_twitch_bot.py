@@ -11,6 +11,7 @@ import requests
 import logging
 import aiohttp
 import asyncio
+import psutil
 import pytz
 import json
 import time
@@ -259,21 +260,20 @@ class DaggerfallBot(commands.Bot):
             return False
 
     async def crash_monitor(self):
-        """Monitors for Daggerfall Unity crash and reboots if detected"""
         logging.info("Starting crash monitor loop...")
-
         while True:
             await asyncio.sleep(10)
-            # logging.info("Checking if Daggerfall Unity is running...")
-
             if not self.is_daggerfall_running():
                 logging.error("Daggerfall Unity process not found — assuming crash")
                 if self.connected_channels:
-                    await self.connected_channels[0].send(
-                        "⚠️ Daggerfall Unity has crashed! Rebooting system, back in a bit..."
-                    )
-                os.system("shutdown /r /t 5")
-                break
+                    try:
+                        await self.connected_channels[0].send(
+                            "⚠️ Daggerfall Unity has crashed! Restarting the stack, back in a sec..."
+                        )
+                    except Exception:
+                        pass
+
+                os._exit(100)  # special exit code that means "DFU crashed"
 
     async def log_chat_command(self, username, command, args):
         """Append chat commands to a local log file"""
