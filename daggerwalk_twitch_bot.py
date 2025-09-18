@@ -1,6 +1,4 @@
 from datetime import datetime, timedelta, timezone, date
-from email import message
-from pywinauto.keyboard import send_keys
 from twitchio.ext import commands
 import pygetwindow as gw
 from enum import Enum
@@ -11,7 +9,6 @@ import requests
 import logging
 import aiohttp
 import asyncio
-import psutil
 import pytz
 import json
 import time
@@ -42,6 +39,7 @@ class Config:
     PARAMS_FILE = "parameters.json"
     TWITCH_CHANNEL = "daggerwalk"
     BOT_USERNAME = "daggerwalk_bot"
+    REFRESH_INTERVAL = 90
     AUTOSAVE_INTERVAL = 600  # 10 minutes
     CHAT_DELAY = 1.5  # seconds
     VOTING_DURATION = 30  # seconds
@@ -174,7 +172,7 @@ def post_to_django(data, reset=False):
         return response            
 
     except requests.Timeout:
-        logging.error(f"Timeout posting to Django after 5s: {Config.DJANGO_LOG_URL}")
+        logging.error(f"Timeout posting to Django after 15s: {Config.DJANGO_LOG_URL}")
     except requests.ConnectionError:
         logging.error(f"Connection error posting to Django: {Config.DJANGO_LOG_URL}")
     except Exception as e:
@@ -206,6 +204,7 @@ class DaggerfallBot(commands.Bot):
 
     async def event_ready(self):
         logging.info(f"Bot online as {self.nick}")
+        self.refresh_task = asyncio.create_task(self.data_refresh_loop())
         self.autosave_task = asyncio.create_task(self.autosave_loop())
         self.message_task = asyncio.create_task(self.message_scheduler())
         self.crash_monitor_task = asyncio.create_task(self.crash_monitor())
@@ -232,6 +231,34 @@ class DaggerfallBot(commands.Bot):
         
         # Wait for both tasks indefinitely
         await asyncio.gather(info_task, help_task)
+
+    async def data_refresh_loop(self):
+        """Periodically post to Django to refresh cached log/quest data."""
+        logging.info("Starting data refresh loop")
+        while True:
+            try:
+                data = await self.get_map_json_data()
+                # offload blocking HTTP to a thread to avoid stalling the event loop
+                response = await asyncio.to_thread(post_to_django, data)
+                if response and response.status_code == 201:
+                    self._latest_response_data = response.json()
+                    self._latest_response_at = datetime.now(timezone.utc)
+            except Exception as e:
+                logging.error(f"data_refresh_loop error: {e}")
+            await asyncio.sleep(Config.REFRESH_INTERVAL)
+
+    async def refresh_now(self):
+        """One-shot refresh of cached data without chat output."""
+        try:
+            data = await self.get_map_json_data()
+            response = await asyncio.to_thread(post_to_django, data)
+            if response and response.status_code == 201:
+                self._latest_response_data = response.json()
+                self._latest_response_at = datetime.now(timezone.utc)
+                return True
+        except Exception as e:
+            logging.error(f"refresh_now error: {e}")
+        return False
 
     async def autosave_loop(self):
         """Periodic game auto-save"""
@@ -831,9 +858,13 @@ class DaggerfallBot(commands.Bot):
     async def game_info(self):
         """Display game state information"""
         try:
-            # Load map data and send to API
-            data = await self.get_map_json_data()
-            response = post_to_django(data)
+            # Require existing cached response; attempt one-shot refresh if missing
+            if not self._latest_response_data:
+                ok = await self.refresh_now()
+                if not ok:
+                    if self.connected_channels:
+                        await self.connected_channels[0].send("No info yet — gathering data…")
+                    return
             
             # Cache music tracks if needed
             if not hasattr(self, '_music_tracks'):
@@ -841,11 +872,7 @@ class DaggerfallBot(commands.Bot):
                 self._music_tracks = await self.load_json_async(music_data_path)
                 self._track_map = {track['TrackName']: track['TrackID'] for track in self._music_tracks}
 
-            # Process API response
-            response_data = response.json()
-            self._latest_response_data = response_data
-            self._latest_response_at = datetime.now(timezone.utc)
-
+            response_data = self._latest_response_data  # cached
             log_data = response_data['log_data']
             log_json = json.loads(log_data['log']) if isinstance(log_data.get('log'), str) else log_data.get('log', {})
             region_fk = log_json.get('region_fk', {})
@@ -882,24 +909,24 @@ class DaggerfallBot(commands.Bot):
             
             # Format time
             date_str = log_json.get('date', '')
-            date = ""
+            date_val = ""
             time_12hr = ""
             if date_str and ',' in date_str:
                 date_parts = date_str.split(',')
                 time_part = date_parts[-1].strip()
                 try:
-                    time = datetime.strptime(time_part, '%H:%M:%S')
-                    time_12hr = time.strftime('%I:%M %p').lstrip('0')
-                    date = f"{','.join(date_parts[:-1]).strip()}"
+                    time_dt = datetime.strptime(time_part, '%H:%M:%S')
+                    time_12hr = time_dt.strftime('%I:%M %p').lstrip('0')
+                    date_val = f"{','.join(date_parts[:-1]).strip()}"
                 except ValueError:
-                    date = date_str
+                    date_val = date_str
             
             # Weather and season emojis
             weather_emoji = Config.WEATHER_EMOJIS.get(weather, "🌈")
             season_emoji = Config.SEASON_EMOJIS.get(season, "❓")
             
             # Get track ID and music info
-            track_id = self._track_map.get(current_song, None)
+            track_id = getattr(self, '_track_map', {}).get(current_song, None)
             music_info = f"🎵{current_song} (Track {track_id})" if current_song and track_id is not None else ""
             
             # Build map link
@@ -916,7 +943,7 @@ class DaggerfallBot(commands.Bot):
             status = " ".join(filter(None, [
                 location_part,
                 f"⌚{time_12hr}", 
-                f"📅{date}",
+                f"📅{date_val}",
                 f"{season_emoji}{season}",
                 f"{weather_emoji}{weather}",
                 f"{music_info}",
@@ -1028,7 +1055,7 @@ class DaggerfallBot(commands.Bot):
             "!walk • !stop • !jump • !use • !esc • !left [num] • "
             "!right [num] • !up [num] • !down [num] • !forward [num] • "
             "!back [num] • !map • !modlist • !shotgun • !song • !reset • !selfie • "
-            "!more"
+            "!info • !quest • !more"
         )
         
         await channel.send(combined_message)
@@ -1120,10 +1147,10 @@ class DaggerfallBot(commands.Bot):
     async def quest(self):
         """Report current quest (and most recent completion if present)."""
         try:
-            # If we’ve never cached a response (e.g., right after startup), fetch once via !info
+            # If we’ve never cached a response (e.g., right after startup), try one-shot refresh
             if not self._latest_response_data:
-                await self.game_info()  # also sends status once, which is acceptable
-                if not self._latest_response_data:
+                ok = await self.refresh_now()
+                if not ok:
                     if self.connected_channels:
                         await self.connected_channels[0].send("No quest info available yet.")
                     return
