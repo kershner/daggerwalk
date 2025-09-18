@@ -185,6 +185,8 @@ class DaggerfallBot(commands.Bot):
         client_id, oauth = Config.get_oauth()
         super().__init__(token=oauth, prefix="!", initial_channels=[Config.TWITCH_CHANNEL])
         
+        self._latest_response_data = None
+        self._latest_response_at = None
         self.last_autosave = datetime.now(timezone.utc)
         self.voting_active = False
         self.current_vote_type = None
@@ -345,6 +347,7 @@ class DaggerfallBot(commands.Bot):
             "killall": self.killall,
             "info": self.game_info,
             "more": self.more_commands,
+            "quest": self.quest,
         }
 
         if command in command_map:
@@ -840,6 +843,9 @@ class DaggerfallBot(commands.Bot):
 
             # Process API response
             response_data = response.json()
+            self._latest_response_data = response_data
+            self._latest_response_at = datetime.now(timezone.utc)
+
             log_data = response_data['log_data']
             log_json = json.loads(log_data['log']) if isinstance(log_data.get('log'), str) else log_data.get('log', {})
             region_fk = log_json.get('region_fk', {})
@@ -1064,6 +1070,77 @@ class DaggerfallBot(commands.Bot):
             return
         logging.info(f"Executing admin command: {' '.join(args)}")
         self.send_console_command(" ".join(args))
+
+    def _format_quest_lines_from_response(self, response_data):
+        """Return (completion_line, current_line) based on latest response_data."""
+        try:
+            quest_completed = bool(response_data.get("quest_completed"))
+            completed_quest = response_data.get("completed_quest") or {}
+            current_quest = response_data.get("current_quest") or {}
+
+            completion_line = ""
+            if quest_completed:
+                cq_name = (
+                    completed_quest.get("poi_name")
+                    or completed_quest.get("name")
+                    or current_quest.get("poi_name")
+                    or "Quest"
+                )
+                cq_xp = (
+                    completed_quest.get("xp_awarded")
+                    or completed_quest.get("xp")
+                    or current_quest.get("xp")
+                )
+                xp_part = f" (+{cq_xp} XP)" if cq_xp not in (None, "", 0) else ""
+                completion_line = f"✅ Quest complete: {cq_name}{xp_part}"
+
+            current_line = ""
+            if current_quest:
+                q_poi = current_quest.get("poi_name") or "Quest"
+                q_region = current_quest.get("region_name") or ""
+                q_status = current_quest.get("status") or ""
+                q_xp = current_quest.get("xp")
+                q_desc = current_quest.get("description") or ""
+                parts = [
+                    f"🧭 Current quest: {q_poi}",
+                    f"in {q_region}" if q_region else "",
+                    f"({q_status})" if q_status else "",
+                    f"[{q_xp} XP]" if q_xp not in (None, "", 0) else "",
+                ]
+                if q_desc:
+                    short_desc = (q_desc[:120] + "…") if len(q_desc) > 120 else q_desc
+                    parts.append(f"— {short_desc}")
+                current_line = " ".join(filter(None, parts))
+
+            return completion_line, current_line
+        except Exception as e:
+            logging.error(f"_format_quest_lines_from_response error: {e}")
+            return "", ""
+
+    async def quest(self):
+        """Report current quest (and most recent completion if present)."""
+        try:
+            # If we’ve never cached a response (e.g., right after startup), fetch once via !info
+            if not self._latest_response_data:
+                await self.game_info()  # also sends status once, which is acceptable
+                if not self._latest_response_data:
+                    if self.connected_channels:
+                        await self.connected_channels[0].send("No quest info available yet.")
+                    return
+
+            completion_line, current_line = self._format_quest_lines_from_response(self._latest_response_data)
+
+            if self.connected_channels:
+                # Prefer showing current quest; include completion if the last update completed one
+                if current_line:
+                    await self.connected_channels[0].send(current_line)
+                if completion_line:
+                    await self.connected_channels[0].send(completion_line)
+
+        except Exception as e:
+            logging.error(f"!quest error: {e}")
+            if self.connected_channels:
+                await self.connected_channels[0].send("Failed to fetch quest info.")
 
 if __name__ == "__main__":
     bot = DaggerfallBot()
