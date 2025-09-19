@@ -39,7 +39,7 @@ class Config:
     PARAMS_FILE = "parameters.json"
     TWITCH_CHANNEL = "daggerwalk"
     BOT_USERNAME = "daggerwalk_bot"
-    REFRESH_INTERVAL = 90
+    REFRESH_INTERVAL = 300  # 5 minutesa
     AUTOSAVE_INTERVAL = 600  # 10 minutes
     CHAT_DELAY = 1.5  # seconds
     VOTING_DURATION = 30  # seconds
@@ -191,6 +191,7 @@ class DaggerfallBot(commands.Bot):
         self.current_vote_message = None
         self.votes = {}
         self._state_ready = asyncio.Event()
+        self._startup_tasks_started = False
         
         self.votable_commands = {
             "reset": "reset to last known location",
@@ -205,6 +206,11 @@ class DaggerfallBot(commands.Bot):
 
     async def event_ready(self):
         logging.info(f"Bot online as {self.nick}")
+        if self._startup_tasks_started:
+            logging.info("event_ready called again — tasks already started; ignoring.")
+            return
+        self._startup_tasks_started = True
+        
         self.refresh_task = asyncio.create_task(self.data_refresh_loop())
         self.autosave_task = asyncio.create_task(self.autosave_loop())
         self.message_task = asyncio.create_task(self.message_scheduler())
@@ -900,11 +906,13 @@ class DaggerfallBot(commands.Bot):
         """Display game state information (cached only, no stuck-check)."""
         try:
             # Ensure we have cached data; do a one-shot refresh if empty
-            if not self._latest_response_data:
+            if not self._latest_response_data or (
+                self._latest_response_at and
+                (datetime.now(timezone.utc) - self._latest_response_at).total_seconds() > Config.REFRESH_INTERVAL * 2
+            ):
                 ok = await self.refresh_now()
-                if not ok:
-                    if self.connected_channels:
-                        await self.connected_channels[0].send("No info yet — gathering data…")
+                if not ok and self.connected_channels:
+                    await self.connected_channels[0].send("No info yet — gathering data…")
                     return
 
             # Cache music tracks if needed
