@@ -920,7 +920,7 @@ class DaggerfallBot(commands.Bot):
     async def game_info(self):
         """Display game state information (cached only, no stuck-check)."""
         try:
-            # Ensure we have cached data; do a one-shot refresh if empty
+            # Ensure we have cached data; do a one-shot refresh if empty or very stale
             if not self._latest_response_data or (
                 self._latest_response_at and
                 (datetime.now(timezone.utc) - self._latest_response_at).total_seconds() > Config.REFRESH_INTERVAL * 2
@@ -936,53 +936,48 @@ class DaggerfallBot(commands.Bot):
                 self._music_tracks = await self.load_json_async(music_data_path)
                 self._track_map = {track['TrackName']: track['TrackID'] for track in self._music_tracks}
 
-            # Unpack cached response
+            # === Unpack new Django response ===
             response_data = self._latest_response_data
-            log_data = response_data['log_data']
-            log_json = json.loads(log_data['log']) if isinstance(log_data.get('log'), str) else log_data.get('log', {})
-            region_fk = log_json.get('region_fk', {})
+            log = response_data.get('log') or {}
+            region_fk = log.get('region_fk') or {}
+            poi = log.get('poi') or {}
 
-            # Extract basics
-            region = log_json.get('region', '')
-            location = log_json.get('location', '')
-            weather = log_json.get('weather', '')
-            season = log_json.get('season', '')
-            current_song = log_json.get('current_song', '')
-            in_ocean = log_data.get('in_ocean') == 'true'
-            climate = region_fk.get('climate', '')
+            # Basics
+            region = (log.get('region') or '').strip()
+            location = (log.get('location') or '').strip()
+            weather = (log.get('weather') or '').strip()
+            season = (log.get('season') or '').strip()
+            current_song = (log.get('current_song') or '').strip()
 
-            # Emoji decode helper
-            def decode_emoji(emoji_str):
-                if not emoji_str:
-                    return ""
-                try:
-                    import ast
-                    return ast.literal_eval(f'"{emoji_str}"')
-                except Exception:
-                    return ""
+            # Ocean + "near" handling
+            in_ocean = region.lower() == 'ocean'
+            last_known_name = ''
+            if in_ocean:
+                lkr = log.get('last_known_region')
+                if isinstance(lkr, dict):  # if you nest this in the serializer (recommended)
+                    last_known_name = (lkr.get('name') or '').strip()
 
-            climate_emoji = decode_emoji(region_fk.get('emoji', ''))
+            # Climate/emoji (already proper Unicode via serializers; no decode needed)
+            climate = (region_fk.get('climate') or '').strip()
+            climate_emoji = region_fk.get('emoji') or ''
 
-            # POI emoji (handle None)
-            poi = log_json.get('poi')
-            poi_emoji = ""
-            if isinstance(poi, dict):
-                poi_emoji = decode_emoji(poi.get('emoji', ''))
+            poi_emoji = poi.get('emoji') or ''
 
-            # Time formatting
-            date_str = log_json.get('date', '')
-            date_val, time_12hr = "", ""
+            # Time formatting (date like: "…, HH:MM:SS")
+            date_str = log.get('date', '') or ''
+            date_val, time_12hr, time_hms = "", "", ""
             if date_str and ',' in date_str:
-                date_parts = date_str.split(',')
-                time_part = date_parts[-1].strip()
+                parts = [p.strip() for p in date_str.split(',')]
+                time_hms = parts[-1] if parts else ""
                 try:
-                    time_dt = datetime.strptime(time_part, '%H:%M:%S')
-                    time_12hr = time_dt.strftime('%I:%M %p').lstrip('0')
-                    date_val = f"{','.join(date_parts[:-1]).strip()}"
+                    dt_t = datetime.strptime(time_hms, '%H:%M:%S')
+                    time_12hr = dt_t.strftime('%I:%M %p').lstrip('0')
+                    date_val = ", ".join(parts[:-1]).strip()
                 except ValueError:
+                    # leave raw if parse fails
                     date_val = date_str
 
-            # Emojis for weather/season
+            # Emojis
             weather_emoji = Config.WEATHER_EMOJIS.get(weather, "🌈")
             season_emoji = Config.SEASON_EMOJIS.get(season, "❓")
 
@@ -995,22 +990,26 @@ class DaggerfallBot(commands.Bot):
 
             # Location string
             if in_ocean:
-                location_part = f"🌊Ocean near {log_json.get('last_known_region', '')}"
+                near = f" near {last_known_name}" if last_known_name else ""
+                location_part = f"🌊Ocean{near}"
             else:
-                location_part = f"🌍{region}{climate_emoji}{climate} {poi_emoji}{location}".strip()
+                # e.g. "🌍Daggerfall🌲Woodlands 🏰Wayrest"
+                left = f"🌍{region}{climate_emoji}{climate}".strip()
+                right = f"{poi_emoji}{location}".strip()
+                location_part = f"{left} {right}".strip()
 
             # Final status line
             status = " ".join(filter(None, [
                 location_part,
-                f"⌚{time_12hr}",
-                f"📅{date_val}",
-                f"{season_emoji}{season}",
-                f"{weather_emoji}{weather}",
+                f"⌚{time_12hr}" if time_12hr else "",
+                f"📅{date_val}" if date_val else "",
+                f"{season_emoji}{season}" if season else "",
+                f"{weather_emoji}{weather}" if weather else "",
                 music_info,
                 map_link,
             ]))
 
-            # Debounce to avoid duplicate info messages when script starts or overlaps
+            # Debounce to avoid duplicate !info within a short window
             now_m = time.monotonic()
             last_m = getattr(self, "_last_info_sent_at", 0.0)
             if now_m - last_m >= 3.5:
@@ -1020,10 +1019,9 @@ class DaggerfallBot(commands.Bot):
             else:
                 logging.info("Suppressed duplicate !info within debounce window")
 
-            # Update stream title
-            if date_str and ',' in date_str:
-                time_str = date_str.split(',')[-1].strip()
-                await self.update_stream_title(region, weather, time_str)
+            # Update stream title when we have HH:MM:SS
+            if time_hms:
+                await self.update_stream_title(region or "", weather or "", time_hms)
 
         except Exception as e:
             logging.error(f"Info error: {e}")
