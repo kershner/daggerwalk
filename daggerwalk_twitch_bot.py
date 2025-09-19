@@ -1180,7 +1180,7 @@ class DaggerfallBot(commands.Bot):
                     f"🧭Current quest: {desc} in {region_name} for {xp} XP | 🗺️Map: ".replace(".", ""),
                     url
                 ]
-                current_line = ". ".join(parts)
+                current_line = "".join(parts)
 
             # Build "completed_quest" line
             completion_line = ""
