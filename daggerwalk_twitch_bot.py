@@ -1150,14 +1150,17 @@ class DaggerfallBot(commands.Bot):
             current_line = ""
             if current_quest:
                 desc = (current_quest.get("description") or "").strip()
-                region_name = (current_quest.get("region_name") or "").strip()
                 xp = current_quest.get("xp")
 
                 poi = current_quest.get("poi") or {}
-                # Prefer poi.region.name; fall back to current_quest.region_name
                 poi_region_obj = poi.get("region") or {}
-                poi_region_name = poi_region_obj.get("name") if isinstance(poi_region_obj, dict) else None
-                url_region = poi_region_name or region_name or ""
+
+                # Prefer nested poi.region.name; fall back to old top-level region_name if present
+                region_name = (
+                    current_quest.get("region_name")
+                    or (poi_region_obj.get("name") if isinstance(poi_region_obj, dict) else None)
+                    or ""
+                ).strip()
 
                 map_x = poi.get("map_pixel_x")
                 map_y = poi.get("map_pixel_y")
@@ -1169,18 +1172,14 @@ class DaggerfallBot(commands.Bot):
 
                 url = (
                     "https://kershner.org/daggerwalk"
-                    f"?region={enc(url_region)}"
+                    f"?region={enc(region_name)}"
                     f"&x={enc(map_x)}"
                     f"&y={enc(map_y)}"
                     f"&emoji={enc(poi_emoji)}"
                     f"&poi={enc(poi_name)}"
                 )
 
-                parts = [
-                    f"🧭Current quest: {desc} in {region_name} for {xp} XP | 🗺️Map: ".replace(".", ""),
-                    url
-                ]
-                current_line = "".join(parts)
+                current_line = f"🧭Current quest: {desc} in {region_name} for {xp} XP | 🗺️Map: {url}"
 
             # Build "completed_quest" line
             completion_line = ""
