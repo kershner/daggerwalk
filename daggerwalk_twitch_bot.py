@@ -428,7 +428,7 @@ class DaggerfallBot(commands.Bot):
             "selfie": self.toggle_selfie,
             "bighop": self.bighop,
             "shotgun": self.use_shotgun,
-            "save": self.save_game,
+            "save": lambda: self.admin_command(message, self.save_game),
             "load": lambda: self.admin_command(message, self.load_game),
             "modlist": self.modlist,
             "help": self.help,
@@ -457,8 +457,7 @@ class DaggerfallBot(commands.Bot):
 
     def validate_song_arg(self, args):
         """Validate song selection"""
-        songs_tab_link = "Song List: https://kershner.org/daggerwalk?tab=songs"
-        default_msg = f'Specify song number (-1 to 131), "category" or "random". {songs_tab_link}'
+        default_msg = f'Specify song number (-1 to 131), "category" or "random".'
         
         if not args:
             return False, default_msg
@@ -1155,8 +1154,6 @@ class DaggerfallBot(commands.Bot):
             current_line = ""
             if current_quest:
                 desc = (current_quest.get("description") or "").replace(".", "").strip()
-                xp = current_quest.get("xp")
-
                 poi = current_quest.get("poi") or {}
                 poi_region_obj = poi.get("region") or {}
 
@@ -1167,24 +1164,8 @@ class DaggerfallBot(commands.Bot):
                     or ""
                 ).strip()
 
-                map_x = poi.get("map_pixel_x")
-                map_y = poi.get("map_pixel_y")
-                poi_emoji = poi.get("emoji") or ""
-                poi_name = poi.get("name") or ""
-
-                def enc(v):
-                    return quote_plus(str(v)) if v is not None else ""
-
-                url = (
-                    "https://kershner.org/daggerwalk"
-                    f"?region={enc(region_name)}"
-                    f"&x={enc(map_x)}"
-                    f"&y={enc(map_y)}"
-                    f"&emoji={enc(poi_emoji)}"
-                    f"&poi={enc(poi_name)}"
-                )
-
-                current_line = f"🧭Current quest: {desc} in {region_name} | 🗺️Map: {url}"
+                url = "https://kershner.org/daggerwalk/quest"
+                current_line = f"🧭Current quest: {desc} in {region_name} 🗺️Map: {url}"
 
             # Build "completed_quest" line
             completion_line = ""
