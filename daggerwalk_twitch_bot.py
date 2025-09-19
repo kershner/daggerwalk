@@ -233,7 +233,9 @@ class DaggerfallBot(commands.Bot):
         await asyncio.gather(info_task, help_task)
 
     async def data_refresh_loop(self):
-        """Periodically post to Django to refresh cached log/quest data."""
+        """Periodically post to Django to refresh cached log/quest data,
+        then run stuck/shutdown side-effects only on successful refresh.
+        """
         logging.info("Starting data refresh loop")
         while True:
             try:
@@ -243,9 +245,21 @@ class DaggerfallBot(commands.Bot):
                 if response and response.status_code == 201:
                     self._latest_response_data = response.json()
                     self._latest_response_at = datetime.now(timezone.utc)
+
+                    # Run side-effects here (NOT in !info / !quest)
+                    try:
+                        await self.check_if_bot_is_stuck()
+                    except Exception as e:
+                        logging.error(f"check_if_bot_is_stuck in refresh loop error: {e}")
+                    try:
+                        await self.send_shutdown_warning()
+                    except Exception as e:
+                        logging.error(f"send_shutdown_warning in refresh loop error: {e}")
+
             except Exception as e:
                 logging.error(f"data_refresh_loop error: {e}")
             await asyncio.sleep(Config.REFRESH_INTERVAL)
+
 
     async def refresh_now(self):
         """One-shot refresh of cached data without chat output."""
@@ -856,28 +870,29 @@ class DaggerfallBot(commands.Bot):
 
 
     async def game_info(self):
-        """Display game state information"""
+        """Display game state information (cached only, no stuck-check)."""
         try:
-            # Require existing cached response; attempt one-shot refresh if missing
+            # Ensure we have cached data; do a one-shot refresh if empty
             if not self._latest_response_data:
                 ok = await self.refresh_now()
                 if not ok:
                     if self.connected_channels:
                         await self.connected_channels[0].send("No info yet — gathering data…")
                     return
-            
+
             # Cache music tracks if needed
             if not hasattr(self, '_music_tracks'):
                 music_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'list_music_tracks.json')
                 self._music_tracks = await self.load_json_async(music_data_path)
                 self._track_map = {track['TrackName']: track['TrackID'] for track in self._music_tracks}
 
-            response_data = self._latest_response_data  # cached
+            # Unpack cached response
+            response_data = self._latest_response_data
             log_data = response_data['log_data']
             log_json = json.loads(log_data['log']) if isinstance(log_data.get('log'), str) else log_data.get('log', {})
             region_fk = log_json.get('region_fk', {})
-            
-            # Extract basic data
+
+            # Extract basics
             region = log_json.get('region', '')
             location = log_json.get('location', '')
             weather = log_json.get('weather', '')
@@ -885,32 +900,28 @@ class DaggerfallBot(commands.Bot):
             current_song = log_json.get('current_song', '')
             in_ocean = log_data.get('in_ocean') == 'true'
             climate = region_fk.get('climate', '')
-            
-            # Use a more robust method to decode Unicode escape sequences
+
+            # Emoji decode helper
             def decode_emoji(emoji_str):
                 if not emoji_str:
                     return ""
                 try:
                     import ast
-                    # Convert Unicode escape sequence to Python string literal and evaluate it
                     return ast.literal_eval(f'"{emoji_str}"')
-                except Exception as e:
-                    logging.error(f"Failed to decode emoji: {e}")
+                except Exception:
                     return ""
-            
-            # Get climate emoji from region_fk
+
             climate_emoji = decode_emoji(region_fk.get('emoji', ''))
-            
-            # Extract POI emoji - handle null POI case
+
+            # POI emoji (handle None)
             poi = log_json.get('poi')
             poi_emoji = ""
-            if poi is not None and isinstance(poi, dict):  # Check if poi exists and is a dictionary
+            if poi is not None and isinstance(poi, dict):
                 poi_emoji = decode_emoji(poi.get('emoji', ''))
-            
-            # Format time
+
+            # Time formatting
             date_str = log_json.get('date', '')
-            date_val = ""
-            time_12hr = ""
+            date_val, time_12hr = "", ""
             if date_str and ',' in date_str:
                 date_parts = date_str.split(',')
                 time_part = date_parts[-1].strip()
@@ -920,51 +931,52 @@ class DaggerfallBot(commands.Bot):
                     date_val = f"{','.join(date_parts[:-1]).strip()}"
                 except ValueError:
                     date_val = date_str
-            
-            # Weather and season emojis
+
+            # Emojis for weather/season
             weather_emoji = Config.WEATHER_EMOJIS.get(weather, "🌈")
             season_emoji = Config.SEASON_EMOJIS.get(season, "❓")
-            
-            # Get track ID and music info
+
+            # Music info
             track_id = getattr(self, '_track_map', {}).get(current_song, None)
             music_info = f"🎵{current_song} (Track {track_id})" if current_song and track_id is not None else ""
-            
-            # Build map link
-            map_link = f"🗺️Map: https://kershner.org/daggerwalk"
-            
-            # Format location - now with POI emoji
+
+            # Map link
+            map_link = "🗺️Map: https://kershner.org/daggerwalk"
+
+            # Location string
             if in_ocean:
                 location_part = f"🌊Ocean near {log_json.get('last_known_region', '')}"
             else:
                 location_part = f"🌍{region}{climate_emoji}{climate} {poi_emoji}{location}"
-                logging.info(f"Location part: {location_part}")  # Debug to see what's happening with the emoji
-            
-            # Format status message - with spaces between parts
+
+            # Final status line
             status = " ".join(filter(None, [
                 location_part,
-                f"⌚{time_12hr}", 
+                f"⌚{time_12hr}",
                 f"📅{date_val}",
                 f"{season_emoji}{season}",
                 f"{weather_emoji}{weather}",
                 f"{music_info}",
-                f"{map_link}"
+                f"{map_link}",
             ]))
-            
-            logging.info(f"Game status: {status}")
-            
-            # Send message
-            if self.connected_channels:
-                await self.connected_channels[0].send(status)
 
+            # Debounce to avoid double posts when !info overlaps the scheduler
+            now_m = time.monotonic()
+            last_m = getattr(self, "_last_info_sent_at", 0.0)
+            if now_m - last_m >= 3.5:
+                if self.connected_channels:
+                    await self.connected_channels[0].send(status)
+                self._last_info_sent_at = now_m
+            else:
+                logging.info("Suppressed duplicate !info within debounce window")
+
+            # Update stream title
             if date_str and ',' in date_str:
-                time_str = date_str.split(',')[-1].strip()  # e.g., "22:52:08"
+                time_str = date_str.split(',')[-1].strip()
                 await self.update_stream_title(region, weather, time_str)
 
         except Exception as e:
             logging.error(f"Info error: {e}")
-
-        await self.check_if_bot_is_stuck()
-        await self.send_shutdown_warning()
 
     async def send_shutdown_warning(self):
         """Send a one-time nightly shutdown warning about 10 minutes before midnight EST."""
