@@ -184,6 +184,7 @@ class DaggerfallBot(commands.Bot):
         client_id, oauth = Config.get_oauth()
         super().__init__(token=oauth, prefix="!", initial_channels=[Config.TWITCH_CHANNEL])
         
+        self._bot_started_at_monotonic = time.monotonic()
         self._latest_response_data = None
         self._latest_response_at = None
         self.last_autosave = datetime.now(timezone.utc)
@@ -1028,6 +1029,10 @@ class DaggerfallBot(commands.Bot):
 
 
     async def check_if_bot_is_stuck(self):
+        # Skip stuck check for 5 minutes after bot startup
+        if time.monotonic() - self._bot_started_at_monotonic < 300:
+            return
+
         est = pytz.timezone("US/Eastern")
         now = datetime.now(est).time()
 
