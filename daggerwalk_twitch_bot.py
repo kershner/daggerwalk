@@ -1149,7 +1149,7 @@ class DaggerfallBot(commands.Bot):
             # Build "current_quest" line
             current_line = ""
             if current_quest:
-                desc = (current_quest.get("description") or "").strip()
+                desc = (current_quest.get("description") or "").replace(".", "").strip()
                 xp = current_quest.get("xp")
 
                 poi = current_quest.get("poi") or {}
@@ -1203,7 +1203,7 @@ class DaggerfallBot(commands.Bot):
                 if current_line:
                     parts.append(f"Next quest: {current_line}")
 
-                # Join with two spaces between segments, as requested
+                # Join with two spaces between segments
                 completion_line = "  ".join(parts)
 
             return completion_line, current_line
