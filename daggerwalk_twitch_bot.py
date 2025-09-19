@@ -1184,7 +1184,7 @@ class DaggerfallBot(commands.Bot):
                     f"&poi={enc(poi_name)}"
                 )
 
-                current_line = f"🧭Current quest: {desc} in {region_name} for {xp} XP | 🗺️Map: {url}"
+                current_line = f"🧭Current quest: {desc} in {region_name} | 🗺️Map: {url}"
 
             # Build "completed_quest" line
             completion_line = ""
