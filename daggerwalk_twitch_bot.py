@@ -219,28 +219,42 @@ class DaggerfallBot(commands.Bot):
         self.side_effects_task = asyncio.create_task(self.side_effects_loop())
 
     async def message_scheduler(self):
-        """Schedules periodic info (5min) and help (20min) messages"""
+        """Schedules periodic info (5m), help (20m), and quest (25m) messages."""
         logging.info("Starting message scheduler")
 
         # Wait until we have first successful refresh so we don't announce early/empty
         await self._state_ready.wait()
 
-        INFO_INTERVAL = 300  # 5 minutes in seconds
-        HELP_INTERVAL = 1200  # 20 minutes in seconds
-        HELP_OFFSET = 360  # 6 minute offset
+        INFO_INTERVAL = 300      # 5 minutes
+        HELP_INTERVAL = 1200     # 20 minutes
+        QUEST_INTERVAL = 1500    # 25 minutes
 
-        async def run_periodic_message(message_func, interval, initial_delay=0):
+        HELP_OFFSET = 360        # 6 minutes after start
+        QUEST_OFFSET = 120       # 2 minutes after start (staggered to avoid overlaps)
+
+        async def run_periodic_message(message_coro, interval, initial_delay=0):
             if initial_delay > 0:
                 await asyncio.sleep(initial_delay)
             while True:
-                await message_func()
+                try:
+                    await message_coro()
+                except Exception as e:
+                    logging.error(f"periodic message error: {e}")
                 await asyncio.sleep(interval)
 
-        # Add a small initial delay so it doesn't race with manual !info right after ready
-        info_task = asyncio.create_task(run_periodic_message(self.game_info, INFO_INTERVAL, initial_delay=10))
-        help_task = asyncio.create_task(run_periodic_message(self.help, HELP_INTERVAL, HELP_OFFSET))
+        # Small initial delay for !info so it doesn't race with manual commands at startup
+        info_task = asyncio.create_task(
+            run_periodic_message(self.game_info, INFO_INTERVAL, initial_delay=10)
+        )
+        help_task = asyncio.create_task(
+            run_periodic_message(self.help, HELP_INTERVAL, initial_delay=HELP_OFFSET)
+        )
+        quest_task = asyncio.create_task(
+            run_periodic_message(self.quest, QUEST_INTERVAL, initial_delay=QUEST_OFFSET)
+        )
 
-        await asyncio.gather(info_task, help_task)
+        await asyncio.gather(info_task, help_task, quest_task)
+
 
     async def data_refresh_loop(self):
         """Only refresh cached log/quest data; do NOT run side-effects here."""
@@ -1165,10 +1179,10 @@ class DaggerfallBot(commands.Bot):
                 )
 
                 parts = [
-                    f"🧭Current quest: {desc} in {region_name} for {xp} XP",
+                    f"🧭Current quest: {desc} in {region_name} for {xp} XP | 🗺️Map: ".replace(".", ""),
                     url
                 ]
-                current_line = " ".join(parts)
+                current_line = ". ".join(parts)
 
             # Build "completed_quest" line
             completion_line = ""
