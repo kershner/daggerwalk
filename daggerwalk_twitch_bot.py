@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone, date
+from urllib.parse import quote_plus
 from twitchio.ext import commands
 import pygetwindow as gw
 from enum import Enum
@@ -1133,41 +1134,76 @@ class DaggerfallBot(commands.Bot):
             completed_quest = response_data.get("completed_quest") or {}
             current_quest = response_data.get("current_quest") or {}
 
+            # Build "current_quest" line
+            current_line = ""
+            if current_quest:
+                desc = (current_quest.get("description") or "").strip()
+                region_name = (current_quest.get("region_name") or "").strip()
+                xp = current_quest.get("xp")
+
+                poi = current_quest.get("poi") or {}
+                # Prefer poi.region.name; fall back to current_quest.region_name
+                poi_region_obj = poi.get("region") or {}
+                poi_region_name = poi_region_obj.get("name") if isinstance(poi_region_obj, dict) else None
+                url_region = poi_region_name or region_name or ""
+
+                map_x = poi.get("map_pixel_x")
+                map_y = poi.get("map_pixel_y")
+                poi_emoji = poi.get("emoji") or ""
+                poi_name = poi.get("name") or ""
+
+                def enc(v):
+                    return quote_plus(str(v)) if v is not None else ""
+
+                url = (
+                    "https://kershner.org/daggerwalk"
+                    f"?region={enc(url_region)}"
+                    f"&x={enc(map_x)}"
+                    f"&y={enc(map_y)}"
+                    f"&emoji={enc(poi_emoji)}"
+                    f"&poi={enc(poi_name)}"
+                )
+
+                parts = ["🧭Current quest:"]
+                if desc:
+                    parts.append(desc)
+                if region_name:
+                    parts.append(f"in {region_name}")
+                if xp not in (None, "", 0):
+                    parts.append(f"for {xp} XP.")
+                else:
+                    if len(parts) > 1 and not parts[-1].endswith("."):
+                        parts[-1] = parts[-1] + "."
+
+                current_line = " ".join(parts).strip() + "  " + url
+
+            # Build "completed_quest" line
             completion_line = ""
             if quest_completed:
                 cq_name = (
-                    completed_quest.get("poi_name")
-                    or completed_quest.get("name")
+                    completed_quest.get("name")
+                    or completed_quest.get("poi_name")
                     or current_quest.get("poi_name")
                     or "Quest"
                 )
                 cq_xp = (
-                    completed_quest.get("xp_awarded")
-                    or completed_quest.get("xp")
+                    completed_quest.get("xp")
+                    or completed_quest.get("xp_awarded")
                     or current_quest.get("xp")
                 )
-                xp_part = f" (+{cq_xp} XP)" if cq_xp not in (None, "", 0) else ""
-                completion_line = f"✅ Quest complete: {cq_name}{xp_part}"
 
-            current_line = ""
-            if current_quest:
-                q_poi = current_quest.get("poi_name") or "Quest"
-                q_region = current_quest.get("region_name") or ""
-                q_status = current_quest.get("status") or ""
-                q_xp = current_quest.get("xp")
-                q_desc = current_quest.get("description") or ""
-                parts = [
-                    f"🧭 Current quest: {q_poi}",
-                    f"in {q_region}" if q_region else "",
-                    f"({q_status})" if q_status else "",
-                    f"[{q_xp} XP]" if q_xp not in (None, "", 0) else "",
-                ]
-                if q_desc:
-                    short_desc = (q_desc[:120] + "…") if len(q_desc) > 120 else q_desc
-                    parts.append(f"— {short_desc}")
-                current_line = " ".join(filter(None, parts))
+                # Compose: "✅{name} completed!  {xp} XP awarded!  Next quest: {current_line}"
+                parts = [f"✅{cq_name} completed!"]
+                if cq_xp not in (None, "", 0):
+                    parts.append(f"{cq_xp} XP awarded!")
+                if current_line:
+                    parts.append(f"Next quest: {current_line}")
+
+                # Join with two spaces between segments, as requested
+                completion_line = "  ".join(parts)
 
             return completion_line, current_line
+
         except Exception as e:
             logging.error(f"_format_quest_lines_from_response error: {e}")
             return "", ""
