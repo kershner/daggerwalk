@@ -1164,18 +1164,11 @@ class DaggerfallBot(commands.Bot):
                     f"&poi={enc(poi_name)}"
                 )
 
-                parts = ["🧭Current quest:"]
-                if desc:
-                    parts.append(desc)
-                if region_name:
-                    parts.append(f"in {region_name}")
-                if xp not in (None, "", 0):
-                    parts.append(f"for {xp} XP.")
-                else:
-                    if len(parts) > 1 and not parts[-1].endswith("."):
-                        parts[-1] = parts[-1] + "."
-
-                current_line = " ".join(parts).strip() + "  " + url
+                parts = [
+                    f"🧭Current quest: {desc} in {region_name} for {xp} XP",
+                    url
+                ]
+                current_line = " ".join(parts)
 
             # Build "completed_quest" line
             completion_line = ""
