@@ -190,6 +190,7 @@ class DaggerfallBot(commands.Bot):
         self.current_vote_type = None
         self.current_vote_message = None
         self.votes = {}
+        self._state_ready = asyncio.Event()
         
         self.votable_commands = {
             "reset": "reset to last known location",
@@ -208,58 +209,84 @@ class DaggerfallBot(commands.Bot):
         self.autosave_task = asyncio.create_task(self.autosave_loop())
         self.message_task = asyncio.create_task(self.message_scheduler())
         self.crash_monitor_task = asyncio.create_task(self.crash_monitor())
+        self.side_effects_task = asyncio.create_task(self.side_effects_loop())
 
     async def message_scheduler(self):
         """Schedules periodic info (5min) and help (20min) messages"""
         logging.info("Starting message scheduler")
+
+        # Wait until we have first successful refresh so we don't announce early/empty
+        await self._state_ready.wait()
+
         INFO_INTERVAL = 300  # 5 minutes in seconds
         HELP_INTERVAL = 1200  # 20 minutes in seconds
         HELP_OFFSET = 360  # 6 minute offset
-        
+
         async def run_periodic_message(message_func, interval, initial_delay=0):
-            # Wait for initial delay before first execution
             if initial_delay > 0:
                 await asyncio.sleep(initial_delay)
-                
             while True:
                 await message_func()
                 await asyncio.sleep(interval)
-        
-        # Create tasks with appropriate initial delays
-        info_task = asyncio.create_task(run_periodic_message(self.game_info, INFO_INTERVAL))
+
+        # Add a small initial delay so it doesn't race with manual !info right after ready
+        info_task = asyncio.create_task(run_periodic_message(self.game_info, INFO_INTERVAL, initial_delay=10))
         help_task = asyncio.create_task(run_periodic_message(self.help, HELP_INTERVAL, HELP_OFFSET))
-        
-        # Wait for both tasks indefinitely
+
         await asyncio.gather(info_task, help_task)
 
     async def data_refresh_loop(self):
-        """Periodically post to Django to refresh cached log/quest data,
-        then run stuck/shutdown side-effects only on successful refresh.
-        """
+        """Only refresh cached log/quest data; do NOT run side-effects here."""
         logging.info("Starting data refresh loop")
+        first_success = False
         while True:
             try:
                 data = await self.get_map_json_data()
-                # offload blocking HTTP to a thread to avoid stalling the event loop
                 response = await asyncio.to_thread(post_to_django, data)
                 if response and response.status_code == 201:
                     self._latest_response_data = response.json()
                     self._latest_response_at = datetime.now(timezone.utc)
 
-                    # Run side-effects here (NOT in !info / !quest)
-                    try:
-                        await self.check_if_bot_is_stuck()
-                    except Exception as e:
-                        logging.error(f"check_if_bot_is_stuck in refresh loop error: {e}")
-                    try:
-                        await self.send_shutdown_warning()
-                    except Exception as e:
-                        logging.error(f"send_shutdown_warning in refresh loop error: {e}")
-
+                    if not first_success:
+                        first_success = True
+                        self._state_ready.set()  # unblocks scheduler/commands that want initial state
             except Exception as e:
                 logging.error(f"data_refresh_loop error: {e}")
             await asyncio.sleep(Config.REFRESH_INTERVAL)
 
+    async def side_effects_loop(self):
+        """Run operational side-effects on a steady cadence, decoupled from refresh."""
+        # Wait until we have at least one successful refresh
+        await self._state_ready.wait()
+        logging.info("Starting side effects loop")
+
+        last_shutdown_notice_date = None
+
+        while True:
+            try:
+                # Nightly shutdown notice: ensure once-per-day semantics
+                est = pytz.timezone("US/Eastern")
+                now_est = datetime.now(est)
+                midnight_next = (now_est + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                minutes_until = int((midnight_next - now_est).total_seconds() // 60)
+
+                if 0 < minutes_until <= 10:
+                    if last_shutdown_notice_date != now_est.date():
+                        last_shutdown_notice_date = now_est.date()
+                        if self.connected_channels:
+                            await self.connected_channels[0].send(
+                                f"🛌 The Walker will rest for the night in {minutes_until} minutes, "
+                                "at midnight EST. They'll be back in the morning!"
+                            )
+
+                # Stuck check (run on a calm interval, not on every command/refresh)
+                await self.check_if_bot_is_stuck()
+
+            except Exception as e:
+                logging.error(f"side_effects_loop error: {e}")
+
+            # Tweak interval as desired
+            await asyncio.sleep(60)
 
     async def refresh_now(self):
         """One-shot refresh of cached data without chat output."""
@@ -916,7 +943,7 @@ class DaggerfallBot(commands.Bot):
             # POI emoji (handle None)
             poi = log_json.get('poi')
             poi_emoji = ""
-            if poi is not None and isinstance(poi, dict):
+            if isinstance(poi, dict):
                 poi_emoji = decode_emoji(poi.get('emoji', ''))
 
             # Time formatting
@@ -947,7 +974,7 @@ class DaggerfallBot(commands.Bot):
             if in_ocean:
                 location_part = f"🌊Ocean near {log_json.get('last_known_region', '')}"
             else:
-                location_part = f"🌍{region}{climate_emoji}{climate} {poi_emoji}{location}"
+                location_part = f"🌍{region}{climate_emoji}{climate} {poi_emoji}{location}".strip()
 
             # Final status line
             status = " ".join(filter(None, [
@@ -956,11 +983,11 @@ class DaggerfallBot(commands.Bot):
                 f"📅{date_val}",
                 f"{season_emoji}{season}",
                 f"{weather_emoji}{weather}",
-                f"{music_info}",
-                f"{map_link}",
+                music_info,
+                map_link,
             ]))
 
-            # Debounce to avoid double posts when !info overlaps the scheduler
+            # Debounce to avoid duplicate info messages when script starts or overlaps
             now_m = time.monotonic()
             last_m = getattr(self, "_last_info_sent_at", 0.0)
             if now_m - last_m >= 3.5:
@@ -978,25 +1005,6 @@ class DaggerfallBot(commands.Bot):
         except Exception as e:
             logging.error(f"Info error: {e}")
 
-    async def send_shutdown_warning(self):
-        """Send a one-time nightly shutdown warning about 10 minutes before midnight EST."""
-        if not self.connected_channels:
-            return  # not connected yet
-
-        est = pytz.timezone("US/Eastern")
-        now = datetime.now(est)
-        midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        minutes_until = int((midnight - now).total_seconds() // 60)
-
-        if 0 < minutes_until <= 10:
-            last_notice = getattr(self, "_last_shutdown_notice_date", None)
-            if last_notice != now.date():
-                self._last_shutdown_notice_date = now.date()
-                channel = self.connected_channels[0]
-                await channel.send(
-                    f"🛌 The Walker will rest for the night in {minutes_until} minutes, "
-                    "at midnight EST. They'll be back in the morning!"
-                )
 
     async def check_if_bot_is_stuck(self):
         est = pytz.timezone("US/Eastern")
