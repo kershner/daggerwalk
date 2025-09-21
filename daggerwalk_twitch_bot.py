@@ -767,7 +767,7 @@ class DaggerfallBot(commands.Bot):
         """Teleport outside building/dungeon or do nothing"""
         logging.info("Executing exit command")
 
-        self.send_console_command("trans_out 0")
+        self.send_console_command("trans_out")
         
         await asyncio.sleep(5)
         
@@ -832,7 +832,7 @@ class DaggerfallBot(commands.Bot):
         """Kill all enemies"""
         logging.info("Executing killall command")
         self.send_console_command("killall")
-
+   
     def send_console_command(self, command: str):
         """Send command through game console"""
         logging.info(f"Sending console command: {command}")
@@ -843,7 +843,7 @@ class DaggerfallBot(commands.Bot):
         send_game_input("{ENTER}")  # Send ENTER separately
         time.sleep(1)
         send_game_input(GameKeys.CONSOLE.value)  # Close console
-
+    
     @staticmethod
     async def load_json_async(file_path):
         """Asynchronously loads and returns JSON data from a file."""
@@ -1097,10 +1097,10 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "💀🌲Daggerwalk Commands: "
-            "!walk • !stop • !jump • !use • !esc • !left [num] • "
-            "!right [num] • !up [num] • !down [num] • !forward [num] • "
-            "!back [num] • !map • !modlist • !shotgun • !song • !reset • !selfie • "
-            "!info • !quest • !more"
+            "!walk • !stop • !jump • !left N • "
+            "!right N • !up N • !down N • !forward N • "
+            "!back N • !map • !song •  "
+            "!more"
         )
         
         await channel.send(combined_message)
@@ -1112,7 +1112,7 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "🗡️More Daggerwalk Commands: "
-            "!weather • !levitate • !toggle_ai • !exit • !gravity • !playvid"
+            "!info • !quest • !use • !weather • !levitate • !toggle_ai • !exit • !gravity • !playvid • !modlist • !shotgun • !selfie • !esc"
         )
         
         await channel.send(combined_message)
