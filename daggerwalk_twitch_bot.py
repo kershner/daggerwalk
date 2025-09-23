@@ -415,14 +415,14 @@ class DaggerfallBot(commands.Bot):
         # Map commands to methods
         command_map = {
             "walk": lambda: self.send_movement(GameKeys.WALK),
-            "back": lambda: self.send_movement(GameKeys.BACK, args),
-            "forward": lambda: self.send_movement(GameKeys.FORWARD, args),
-            "left": lambda: self.send_movement(GameKeys.LEFT, args),
-            "right": lambda: self.send_movement(GameKeys.RIGHT, args),
+            "back": lambda: self.handle_movement_arg_required(message, GameKeys.BACK, args),
+            "forward": lambda: self.handle_movement_arg_required(message, GameKeys.FORWARD, args),
+            "left": lambda: self.handle_movement_arg_required(message, GameKeys.LEFT, args),
+            "right": lambda: self.handle_movement_arg_required(message, GameKeys.RIGHT, args),
             "up": lambda: self.send_movement(GameKeys.UP, args),
             "down": lambda: self.send_movement(GameKeys.DOWN, args),
             "jump": lambda: self.send_movement(GameKeys.JUMP, repeat=10),
-            "stop": lambda: self.send_movement(GameKeys.BACK),
+            "stop": lambda: self.handle_movement_arg_required(message, GameKeys.BACK, ["1"]),
             "use": lambda: self.send_movement(GameKeys.USE),
             "map": self.toggle_map,
             "selfie": self.toggle_selfie,
@@ -447,6 +447,13 @@ class DaggerfallBot(commands.Bot):
         """Execute admin-only commands"""
         if message.author.name.lower() in Config.AUTHORIZED_USERS:
             await cmd()
+
+    async def handle_movement_arg_required(self, message, key: GameKeys, args):
+        """Require an integer arg for certain movement commands; otherwise prompt."""
+        if not args:
+            await message.channel.send('Enter the movement command followed by n (1-100), ex - !left 20')
+            return
+        await self.send_movement(key, args)
 
     async def send_movement(self, key: GameKeys, args=None, repeat=1):
         """Handle movement and action commands"""
@@ -836,13 +843,34 @@ class DaggerfallBot(commands.Bot):
     def send_console_command(self, command: str):
         """Send command through game console"""
         logging.info(f"Sending console command: {command}")
-        send_game_input(GameKeys.CONSOLE.value)  # Open console
-        time.sleep(0.5)
-        send_game_input(command)  # Send command
-        time.sleep(0.1)
-        send_game_input("{ENTER}")  # Send ENTER separately
-        time.sleep(1)
-        send_game_input(GameKeys.CONSOLE.value)  # Close console
+        
+        try:
+            # Get the game window
+            window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
+                          if w.title == "Daggerfall Unity"), None)
+                          
+            if not window:
+                logging.warning("Game window not found for console command")
+                return
+                
+            app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
+            dlg = app.window(handle=window._hWnd)
+            
+            # Open console
+            send_game_input(GameKeys.CONSOLE.value)
+            time.sleep(0.5)
+            
+            # Send the command text using type_keys to preserve underscores
+            dlg.type_keys(command, with_spaces=True)
+            time.sleep(0.1)
+            
+            # Send ENTER and close console using regular game input
+            send_game_input("{ENTER}")
+            time.sleep(1)
+            send_game_input(GameKeys.CONSOLE.value)
+            
+        except Exception as e:
+            logging.error(f"Error sending console command: {e}")
     
     @staticmethod
     async def load_json_async(file_path):
@@ -1097,9 +1125,9 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "💀🌲Daggerwalk Commands: "
-            "!walk • !stop • !jump • !left N • "
-            "!right N • !up N • !down N • !forward N • "
-            "!back N • !map • !song •  "
+            "!walk • !stop • !jump • !left • "
+            "!right • !up • !down • !forward • "
+            "!back • !map • !song •  "
             "!more"
         )
         
