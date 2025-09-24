@@ -15,7 +15,13 @@ import json
 import time
 import os
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, 
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    filename="daggerwalk.log",
+    filemode="a"  # Append mode
+)
+
 
 class GameKeys(Enum):
     """Mapping of game actions to keyboard inputs"""
@@ -272,6 +278,9 @@ class DaggerfallBot(commands.Bot):
                     if not first_success:
                         first_success = True
                         self._state_ready.set()  # unblocks scheduler/commands that want initial state
+
+                # Stuck check (run on a calm interval, not on every command/refresh)
+                await self.check_if_bot_is_stuck()
             except Exception as e:
                 logging.error(f"data_refresh_loop error: {e}")
             await asyncio.sleep(Config.REFRESH_INTERVAL)
@@ -300,9 +309,6 @@ class DaggerfallBot(commands.Bot):
                                 f"🛌 The Walker will rest for the night in {minutes_until} minutes, "
                                 "at midnight EST. They'll be back in the morning!"
                             )
-
-                # Stuck check (run on a calm interval, not on every command/refresh)
-                await self.check_if_bot_is_stuck()
 
             except Exception as e:
                 logging.error(f"side_effects_loop error: {e}")
@@ -860,9 +866,8 @@ class DaggerfallBot(commands.Bot):
             send_game_input(GameKeys.CONSOLE.value)
             time.sleep(0.5)
             
-            # Send the command text using type_keys to preserve underscores
-            dlg.type_keys(command, with_spaces=True)
-            time.sleep(0.1)
+            send_game_input(command)  # Send command
+            time.sleep(0.5)
             
             # Send ENTER and close console using regular game input
             send_game_input("{ENTER}")
@@ -946,7 +951,7 @@ class DaggerfallBot(commands.Bot):
 
 
     async def game_info(self):
-        """Display game state information (cached only, no stuck-check)."""
+        """Display game state information (cached only)."""
         try:
             # Ensure we have cached data; do a one-shot refresh if empty or very stale
             if not self._latest_response_data or (
@@ -1056,67 +1061,101 @@ class DaggerfallBot(commands.Bot):
 
 
     async def check_if_bot_is_stuck(self):
+        logging.info("Starting stuck check...")
+        
         # Skip stuck check for 5 minutes after bot startup
-        if time.monotonic() - self._bot_started_at_monotonic < 300:
-            return
+        # uptime = time.monotonic() - self._bot_started_at_monotonic
+        # if uptime < 300:
+        #     logging.info(f"Skipping stuck check - bot uptime only {uptime:.1f}s")
+        #     return
 
         est = pytz.timezone("US/Eastern")
         now = datetime.now(est).time()
+        logging.info(f"Current time EST: {now}")
 
         # Skip the first 10 minutes after midnight and 9 AM Eastern (handles DST automatically)
         if ((now.hour == 0 and now.minute < 10) or
             (now.hour == 9 and now.minute < 10)):
+            logging.info(f"Skipping stuck check - in quiet hours (hour={now.hour}, minute={now.minute})")
             return
         
         try:
             base = Config.DJANGO_BASE_API_URL
+            logging.info(f"Fetching logs from {base}/logs/...")
 
             logs = requests.get(f"{base}/logs/?limit=2&ordering=-id", timeout=5).json().get("results", [])
+            logging.info(f"Retrieved {len(logs)} logs")
             
             if len(logs) < 2:
+                logging.info("Not enough logs for stuck check")
                 return
 
             pos1 = (logs[0].get("world_x"), logs[0].get("world_z"))
             pos2 = (logs[1].get("world_x"), logs[1].get("world_z"))
-            if pos1 != pos2:
+            logging.info(f"Position comparison: pos1={pos1}, pos2={pos2}")
+            
+            # Calculate distance between positions (allow for small movements)
+            STUCK_TOLERANCE = 10  # Units
+            if pos1[0] is not None and pos1[1] is not None and pos2[0] is not None and pos2[1] is not None:
+                distance = ((pos1[0] - pos2[0]) ** 2 + (pos1[1] - pos2[1]) ** 2) ** 0.5
+                logging.info(f"Distance between positions: {distance:.1f} (tolerance: {STUCK_TOLERANCE})")
+                
+                if distance > STUCK_TOLERANCE:
+                    logging.info("Movement detected - not stuck")
+                    return
+            else:
+                logging.warning("Position data incomplete - skipping stuck check")
                 return
 
-            # get last stop and walk (if API supports filtering by command)
+            logging.info("Positions are identical - checking stop/walk commands...")
+
+            # get last stop and walk
             stop_cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id&command=stop", timeout=5).json().get("results", [])
             walk_cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id&command=walk", timeout=5).json().get("results", [])
             stop_id = stop_cmds[0]["id"] if stop_cmds else 0
             walk_id = walk_cmds[0]["id"] if walk_cmds else 0
+            logging.info(f"Last stop ID: {stop_id}, last walk ID: {walk_id}")
 
             # only consider stop newer than walk if the stop is from today
             if stop_cmds:
                 stop_created = stop_cmds[0].get("created") or stop_cmds[0].get("timestamp")
+                logging.info(f"Last stop timestamp: {stop_created}")
                 if stop_created:
                     # handle ISO8601 with optional 'Z'
                     stop_time = datetime.fromisoformat(stop_created.replace("Z", "+00:00"))
+                    logging.info(f"Stop time: {stop_time}, today: {date.today()}")
                     if stop_time.date() == date.today() and stop_id > walk_id:
+                        logging.info("Recent stop command found - not attempting unstuck")
                         return
 
             # still grab most recent command overall (to handle bighop case)
             cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id", timeout=5).json().get("results", [])
             last_cmd = cmds[0]["command"].lower() if cmds else None
+            logging.info(f"Last command: {last_cmd}")
 
             if not self.connected_channels:
+                logging.warning("No connected channels for stuck message")
                 return
             
             channel = self.connected_channels[0]
+            logging.info("Bot appears stuck - sending unstuck message...")
             await channel.send("The Walker might be stuck, attempting to free them...")
 
             if last_cmd == "bighop":
+                logging.info("Executing left 50 as unstuck action")
                 await self.log_chat_command(Config.BOT_USERNAME, "left", ["50"])
                 await channel.send("!left 50")
                 await self.send_movement(GameKeys.LEFT, args=["50"])
             else:
+                logging.info("Executing bighop as unstuck action")
                 await self.log_chat_command(Config.BOT_USERNAME, "bighop", [])
                 await channel.send("!bighop")
                 await self.bighop()
 
         except Exception as e:
             logging.error(f"check_if_bot_is_stuck error: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
 
     async def help(self):
         """Display available commands"""
