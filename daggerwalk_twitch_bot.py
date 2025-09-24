@@ -200,6 +200,7 @@ class DaggerfallBot(commands.Bot):
         self.votes = {}
         self._state_ready = asyncio.Event()
         self._startup_tasks_started = False
+        self._last_completed_quest_id = None
         
         self.votable_commands = {
             "reset": "reset to last known location",
@@ -969,8 +970,23 @@ class DaggerfallBot(commands.Bot):
                 self._music_tracks = await self.load_json_async(music_data_path)
                 self._track_map = {track['TrackName']: track['TrackID'] for track in self._music_tracks}
 
-            # === Unpack new Django response ===
+            # === Check for NEW quest completion ===
             response_data = self._latest_response_data
+            quest_completed = response_data.get('quest_completed', False)
+            completed_quest = response_data.get('completed_quest') or {}
+            completed_quest_id = completed_quest.get('id') if completed_quest else None
+
+            # Only announce if this is a NEW completion we haven't seen before
+            if (quest_completed and completed_quest_id and 
+                completed_quest_id != getattr(self, '_last_completed_quest_id', None)):
+                
+                completion_line, _ = self._format_quest_lines_from_response(response_data)
+                if completion_line and self.connected_channels:
+                    await self.connected_channels[0].send(completion_line)
+                    self._last_completed_quest_id = completed_quest_id
+                    await asyncio.sleep(2)  # Brief delay before regular info
+
+            # === Rest of the existing method unchanged ===
             log = response_data.get('log') or {}
             region_fk = log.get('region_fk') or {}
             poi = log.get('poi') or {}
