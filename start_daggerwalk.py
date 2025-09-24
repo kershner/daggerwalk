@@ -89,12 +89,12 @@ def start_daggerfall():
 
         pyautogui.press("`")  # Open the console (tilde key)
 
-        logging.info("Enabling God Mode...")
-        time.sleep(1)
-        pyautogui.write("tgm")
-        time.sleep(1)
-        pyautogui.press("enter")
-        time.sleep(1)
+        # logging.info("Enabling God Mode...")
+        # time.sleep(1)
+        # pyautogui.write("tgm")
+        # time.sleep(1)
+        # pyautogui.press("enter")
+        # time.sleep(1)
 
         logging.info("Setting jump to 50...")
         pyautogui.write("set_jump 50")

@@ -1080,10 +1080,10 @@ class DaggerfallBot(commands.Bot):
         logging.info("Starting stuck check...")
         
         # Skip stuck check for 5 minutes after bot startup
-        # uptime = time.monotonic() - self._bot_started_at_monotonic
-        # if uptime < 300:
-        #     logging.info(f"Skipping stuck check - bot uptime only {uptime:.1f}s")
-        #     return
+        uptime = time.monotonic() - self._bot_started_at_monotonic
+        if uptime < 300:
+            logging.info(f"Skipping stuck check - bot uptime only {uptime:.1f}s")
+            return
 
         est = pytz.timezone("US/Eastern")
         now = datetime.now(est).time()
