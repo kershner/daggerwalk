@@ -39,7 +39,7 @@ class GameKeys(Enum):
     CONSOLE = "`"
     ESC = "{ESC}"
     USE = "k"
-    SELFIE = "O"
+    CAMERA = "{VK_SEPARATOR}"
 
 class Config:
     """Bot configuration settings"""
@@ -432,7 +432,7 @@ class DaggerfallBot(commands.Bot):
             "stop": lambda: self.handle_movement_arg_required(message, GameKeys.BACK, ["1"]),
             "use": lambda: self.send_movement(GameKeys.USE),
             "map": self.toggle_map,
-            "selfie": self.toggle_selfie,
+            "camera": self.toggle_camera,
             "bighop": self.bighop,
             "shotgun": self.use_shotgun,
             "save": lambda: self.admin_command(message, self.save_game),
@@ -671,13 +671,11 @@ class DaggerfallBot(commands.Bot):
             time.sleep(2)
             send_game_input(GameKeys.MAP.value)  # Press V again
 
-    async def toggle_selfie(self):
+    async def toggle_camera(self):
         """Toggle Third Person Camera mod in game"""
-        logging.info("Executing selfie command")
-        send_game_input(GameKeys.SELFIE.value)
-        time.sleep(8)
-        send_game_input(GameKeys.SELFIE.value)
-
+        logging.info("Executing camera command")
+        time.sleep(1)
+        send_game_input(GameKeys.CAMERA.value)
 
     async def bighop(self):
         """Shortcut for common pattern to get unstuck"""
@@ -781,7 +779,7 @@ class DaggerfallBot(commands.Bot):
         """Teleport outside building/dungeon or do nothing"""
         logging.info("Executing exit command")
 
-        self.send_console_command("trans_out")
+        send_game_input("P")
         
         await asyncio.sleep(5)
         
@@ -1195,7 +1193,7 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "🗡️More Daggerwalk Commands: "
-            "!info • !quest • !use • !weather • !levitate • !toggle_ai • !exit • !gravity • !playvid • !modlist • !shotgun • !selfie • !esc"
+            "!info • !quest • !use • !weather • !levitate • !toggle_ai • !exit • !gravity • !playvid • !modlist • !shotgun • !camera • !esc"
         )
         
         await channel.send(combined_message)
