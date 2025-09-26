@@ -58,8 +58,8 @@ class Config:
     ACTIVE_MODS = [
         "World of Daggerfall", "Interesting Eroded Terrains",
         "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass",
-        "Third Person Camera", "Birds in Daggerfall", "HUD Be Gone", "Future Shock Weapons",
-        "Immersive Footsteps", "Faster Nights", "Auto Walk", "Custom Music Player"
+        "Birds in Daggerfall", "HUD Be Gone", "Future Shock Weapons",
+        "Immersive Footsteps", "Eye of the Beholder", "Render Distance Expander"
     ]
 
     WEATHER_TYPES_MAP = {
