@@ -39,7 +39,7 @@ class GameKeys(Enum):
     CONSOLE = "`"
     ESC = "{ESC}"
     USE = "k"
-    CAMERA = "{VK_SEPARATOR}"
+    CAMERA = "O"
 
 class Config:
     """Bot configuration settings"""
@@ -211,6 +211,7 @@ class DaggerfallBot(commands.Bot):
             "exit": "teleport out of the current building",
             "gravity": "set gravity level",
             "playvid": "play an in-game video",
+            "camera": "toggle third-person camera"
         }
 
     async def event_ready(self):
@@ -643,6 +644,8 @@ class DaggerfallBot(commands.Bot):
         elif self.current_vote_type == "playvid":
             args = self.current_vote_message.content.split()[1:]
             await self.playvid(args[0])
+        elif self.current_vote_type == "camera":
+            await self.toggle_camera()
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -1263,12 +1266,12 @@ class DaggerfallBot(commands.Bot):
                     or current_quest.get("xp")
                 )
 
-                # Compose: "✅{name} completed!  {xp} XP awarded!  Next quest: {current_line}"
+                # Compose: "✅{name} completed!  {xp} XP awarded!  {current_line}"
                 parts = [f"✅{cq_name} completed!"]
                 if cq_xp not in (None, "", 0):
                     parts.append(f"{cq_xp} XP awarded!")
                 if current_line:
-                    parts.append(f"Next quest: {current_line}")
+                    parts.append(current_line)
 
                 # Join with two spaces between segments
                 completion_line = "  ".join(parts)
