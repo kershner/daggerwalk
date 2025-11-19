@@ -173,6 +173,15 @@ def post_to_django(data, reset=False):
             logging.info(f"Successfully posted to Django. Response: {response.json()}")
             # Clear chat log file after success
             open(log_file, "w").close()
+
+            # Add next_log_time to the local state
+            try:
+                est = pytz.timezone("US/Eastern")
+                next_time = datetime.now(est) + timedelta(minutes=5)
+                if hasattr(bot_instance := globals().get("bot"), "_update_state"):
+                    bot_instance._update_state("next_log_time", next_time)
+            except Exception as e:
+                logging.error(f"Failed to update next_log_time: {e}")
         else:
             logging.warning(f"Django post returned non-201 status: {response.status_code}. Response: {response.text}")
 
@@ -201,6 +210,16 @@ class DaggerfallBot(commands.Bot):
         self._state_ready = asyncio.Event()
         self._startup_tasks_started = False
         self._last_completed_quest_id = None
+
+        self.state = {
+            "song": None,
+            "song_category": "all",
+            "gravity": 20,
+            "levitate": "off",
+            "ai_enabled": False,
+            "camera_mode": "third",
+            "next_log_time": None,
+        }
         
         self.votable_commands = {
             "reset": "reset to last known location",
@@ -214,6 +233,15 @@ class DaggerfallBot(commands.Bot):
             "camera": "toggle third-person camera"
         }
 
+    def _update_state(self, key, value):
+        """Safely update a local state field and log the change."""
+        if key in self.state:
+            old = self.state[key]
+            self.state[key] = value
+            logging.info(f"State updated: {key} = {value} (was {old})")
+        else:
+            logging.warning(f"Attempted to set unknown state key: {key}")
+
     async def event_ready(self):
         logging.info(f"Bot online as {self.nick}")
         if self._startup_tasks_started:
@@ -226,6 +254,7 @@ class DaggerfallBot(commands.Bot):
         self.message_task = asyncio.create_task(self.message_scheduler())
         self.crash_monitor_task = asyncio.create_task(self.crash_monitor())
         self.side_effects_task = asyncio.create_task(self.side_effects_loop())
+        self.local_state_refresh_task = asyncio.create_task(self.local_state_refresh_loop())
 
     async def message_scheduler(self):
         """Schedules periodic info (5m), help (20m), and quest (25m) messages."""
@@ -317,6 +346,37 @@ class DaggerfallBot(commands.Bot):
 
             # Tweak interval as desired
             await asyncio.sleep(60)
+
+    async def local_state_refresh_loop(self):
+        """Check MapData.json periodically for song changes."""
+        await self._state_ready.wait()
+        logging.info("Starting local state refresh loop")
+
+        # Ensure track map is loaded
+        if not hasattr(self, "_track_map"):
+            music_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "list_music_tracks.json")
+            self._music_tracks = await self.load_json_async(music_data_path)
+            self._track_map = {track["TrackName"]: track["TrackID"] for track in self._music_tracks}
+
+        last_song = self.state.get("song")
+        last_weather = self.state.get("weather")
+
+        while True:
+            try:
+                data = await self.get_map_json_data()
+                new_song_name = data.get("currentSong")
+
+                if new_song_name and new_song_name != last_song:
+                    track_id = self._track_map.get(new_song_name)
+                    song_display = f"{new_song_name} (Track {track_id})" if track_id is not None else new_song_name
+                    self._update_state("song", song_display)
+                    last_song = new_song_name
+                    logging.info(f"Detected new song: {song_display}")
+
+            except Exception as e:
+                logging.error(f"local_state_refresh_loop error: {e}")
+
+            await asyncio.sleep(30)
 
     async def refresh_now(self):
         """One-shot refresh of cached data without chat output."""
@@ -446,6 +506,7 @@ class DaggerfallBot(commands.Bot):
             "info": self.game_info,
             "more": self.more_commands,
             "quest": self.quest,
+            "state": self.show_state,
         }
 
         if command in command_map:
@@ -679,6 +740,9 @@ class DaggerfallBot(commands.Bot):
         logging.info("Executing camera command")
         time.sleep(1)
         send_game_input(GameKeys.CAMERA.value)
+        current = self.state.get("camera_mode", "first")
+        new_mode = "third" if current == "first" else "first"
+        self._update_state("camera_mode", new_mode)
 
     async def bighop(self):
         """Shortcut for common pattern to get unstuck"""
@@ -729,6 +793,9 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send('Song changed!')
+        track_id = getattr(self, "_track_map", {}).get(str(choice), None)
+        song_display = f"{choice} (Track {track_id})" if track_id is not None else str(choice)
+        self._update_state("song", song_display)
 
     async def song_category(self, categories):
         """Change music to a random song from specified categories"""
@@ -743,6 +810,7 @@ class DaggerfallBot(commands.Bot):
         channel = self.connected_channels[0]
         categories_str_display = ", ".join(categories)
         await channel.send(f'Song shuffle categories changed to: {categories_str_display}!')
+        self._update_state("song_category", categories_str_display.lower())
 
     async def weather(self, weather_choice):
         """Change in-game weather"""
@@ -766,6 +834,7 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send(f'Levitate set to: {levitate_choice}!')
+        self._update_state("levitate", levitate_choice.lower())
 
     async def toggle_enemy_ai(self):
         """Toggle enemy AI on/off"""
@@ -777,6 +846,8 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send("Toggled enemy AI!")
+        current = self.state.get("ai_enabled", True)
+        self._update_state("ai_enabled", not current)
 
     async def exit_building(self):
         """Teleport outside building/dungeon or do nothing"""
@@ -799,6 +870,7 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         await channel.send(f'Gravity set to: {gravity_level}!')
+        self._update_state("gravity", int(gravity_level))
 
     async def playvid(self, idx_str: str):
         """Play an FMV: playvid anim00XX.vid, waits based on per-video durations."""
@@ -1183,7 +1255,7 @@ class DaggerfallBot(commands.Bot):
             "💀🌲Daggerwalk Commands: "
             "!walk • !stop • !jump • !left • "
             "!right • !up • !down • !forward • "
-            "!back • !map • !song •  "
+            "!back • !map • !song • !state • "
             "!more"
         )
         
@@ -1306,6 +1378,37 @@ class DaggerfallBot(commands.Bot):
             logging.error(f"!quest error: {e}")
             if self.connected_channels:
                 await self.connected_channels[0].send("Failed to fetch quest info.")
+
+    async def show_state(self):
+        """Display current local bot state in plain format."""
+        try:
+            parts = []
+            s = self.state
+
+            if s.get("song"):
+                parts.append(f"Song: {s['song']}")
+            if s.get("song_category"):
+                parts.append(f"Song Category: {s['song_category']}")
+            if s.get("gravity") is not None:
+                parts.append(f"Gravity: {s['gravity']}")
+            if s.get("levitate"):
+                parts.append(f"Levitate: {s['levitate']}")
+            if s.get("ai_enabled") is not None:
+                ai_str = "on" if s['ai_enabled'] else "off"
+                parts.append(f"AI: {ai_str}")
+            if s.get("camera_mode"):
+                parts.append(f"Camera: {s['camera_mode']}")
+            if s.get("next_log_time"):
+                est = pytz.timezone("US/Eastern")
+                t = s['next_log_time'].astimezone(est)
+                parts.append(f"Next log: {t.strftime('%I:%M %p EST').lstrip('0')}")
+
+            msg = " • ".join(parts) if parts else "No state values set yet."
+            if self.connected_channels:
+                await self.connected_channels[0].send(msg)
+            logging.info(f"Displayed state: {msg}")
+        except Exception as e:
+            logging.error(f"show_state error: {e}")
 
 if __name__ == "__main__":
     bot = DaggerfallBot()
