@@ -6,6 +6,7 @@ import os
 import pyautogui
 import pygetwindow as gw
 from pathlib import Path
+import youtube_create_broadcast
 
 # Configure logging
 LOG_FILE = "daggerwalk.log"
@@ -249,6 +250,13 @@ def run_bot_supervised():
 # Main execution loop
 if __name__ == "__main__":
     logging.info("=== Starting DaggerWalk Automation ===")
+
+    # try:
+    #     logging.info("Creating YouTube broadcast...")
+    #     youtube_create_broadcast.create_daily_broadcast()
+    # except Exception as e:
+    #     logging.error(f"Failed to create YouTube broadcast: {e}")
+    
     start_obs()
     # First-time DFU setup and every restart are gated inside the supervisor loop
     run_bot_supervised()

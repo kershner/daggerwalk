@@ -782,7 +782,7 @@ class DaggerfallBot(commands.Bot):
         """Teleport outside building/dungeon or do nothing"""
         logging.info("Executing exit command")
 
-        send_game_input("P")
+        send_game_input("=")
         
         await asyncio.sleep(5)
         
