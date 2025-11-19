@@ -1026,6 +1026,8 @@ class DaggerfallBot(commands.Bot):
 
     async def game_info(self):
         """Display game state information (cached only)."""
+        await self.refresh_now()
+
         try:
             # Ensure we have cached data; do a one-shot refresh if empty or very stale
             if not self._latest_response_data or (
@@ -1356,6 +1358,8 @@ class DaggerfallBot(commands.Bot):
 
     async def quest(self):
         """Report current quest (and most recent completion if present)."""
+        await self.refresh_now()
+        
         try:
             # If we’ve never cached a response (e.g., right after startup), try one-shot refresh
             if not self._latest_response_data:
