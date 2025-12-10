@@ -303,7 +303,13 @@ class DaggerfallBot(commands.Bot):
                 data = await self.get_map_json_data()
                 response = await asyncio.to_thread(post_to_django, data)
                 if response and response.status_code == 201:
-                    self._latest_response_data = response.json()
+                    new_data = response.json()
+                    
+                    # Check for NEW quest completion BEFORE updating cache
+                    await self._check_and_announce_quest_completion(new_data)
+                    
+                    # Then update cache
+                    self._latest_response_data = new_data
                     self._latest_response_at = datetime.now(timezone.utc)
 
                     if not first_success:
@@ -315,6 +321,29 @@ class DaggerfallBot(commands.Bot):
             except Exception as e:
                 logging.error(f"data_refresh_loop error: {e}")
             await asyncio.sleep(Config.REFRESH_INTERVAL)
+
+    async def _check_and_announce_quest_completion(self, new_data):
+        """Check if quest was completed and announce if so"""
+        try:
+            quest_completed = new_data.get('quest_completed', False)
+            completed_quest = new_data.get('completed_quest') or {}
+            completed_quest_id = completed_quest.get('id') if completed_quest else None
+            
+            logging.info(f"Quest check - completed: {quest_completed}, ID: {completed_quest_id}, last ID: {getattr(self, '_last_completed_quest_id', None)}")
+            
+            if (quest_completed and completed_quest_id and 
+                completed_quest_id != getattr(self, '_last_completed_quest_id', None)):
+                
+                completion_line, _ = self._format_quest_lines_from_response(new_data)
+                if completion_line and self.connected_channels:
+                    await self.connected_channels[0].send(completion_line)
+                    self._last_completed_quest_id = completed_quest_id
+                    logging.info(f"Quest completion announced: {completed_quest_id}")
+                else:
+                    logging.warning(f"Quest completed but no completion_line generated or no channels")
+            
+        except Exception as e:
+            logging.error(f"_check_and_announce_quest_completion error: {e}")
 
     async def side_effects_loop(self):
         """Run operational side-effects on a steady cadence, decoupled from refresh."""
@@ -1045,21 +1074,7 @@ class DaggerfallBot(commands.Bot):
                 self._music_tracks = await self.load_json_async(music_data_path)
                 self._track_map = {track['TrackName']: track['TrackID'] for track in self._music_tracks}
 
-            # === Check for NEW quest completion ===
             response_data = self._latest_response_data
-            quest_completed = response_data.get('quest_completed', False)
-            completed_quest = response_data.get('completed_quest') or {}
-            completed_quest_id = completed_quest.get('id') if completed_quest else None
-
-            # Only announce if this is a NEW completion we haven't seen before
-            if (quest_completed and completed_quest_id and 
-                completed_quest_id != getattr(self, '_last_completed_quest_id', None)):
-                
-                completion_line, _ = self._format_quest_lines_from_response(response_data)
-                if completion_line and self.connected_channels:
-                    await self.connected_channels[0].send(completion_line)
-                    self._last_completed_quest_id = completed_quest_id
-                    await asyncio.sleep(2)  # Brief delay before regular info
 
             # === Rest of the existing method unchanged ===
             log = response_data.get('log') or {}
