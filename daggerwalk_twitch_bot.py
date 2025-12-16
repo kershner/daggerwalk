@@ -1055,8 +1055,7 @@ class DaggerfallBot(commands.Bot):
 
     async def game_info(self):
         """Display game state information (cached only)."""
-        await self.refresh_now()
-
+        
         try:
             # Ensure we have cached data; do a one-shot refresh if empty or very stale
             if not self._latest_response_data or (
