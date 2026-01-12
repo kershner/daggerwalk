@@ -108,7 +108,14 @@ class Config:
     def get_oauth(cls):
         """Return Twitch OAuth credentials"""
         params = cls.load_params()
-        return params.get("CLIENT_ID", ""), params.get("OAUTH_TOKEN", "")
+        client_id = params.get("CLIENT_ID", "")
+        oauth_token = params.get("OAUTH_TOKEN", "")
+        
+        # Remove 'oauth:' prefix if present
+        if oauth_token.startswith("oauth:"):
+            oauth_token = oauth_token[6:]
+        
+        return client_id, oauth_token
 
     @classmethod
     def get_api_key(cls):
@@ -830,7 +837,7 @@ class DaggerfallBot(commands.Bot):
         logging.info("Executing BIGHOP command")
         send_game_input(GameKeys.BACK.value, repeat=100)
         send_game_input(GameKeys.WALK.value)
-        self.send_movement(GameKeys.JUMP, repeat=10)
+        await self.send_movement(GameKeys.JUMP, repeat=10)
 
     async def use_shotgun(self):
         """Use shotgun weapon by raising weapon, firing, and then lowering it"""
