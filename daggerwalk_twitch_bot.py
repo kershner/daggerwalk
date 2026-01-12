@@ -562,7 +562,7 @@ class DaggerfallBot(commands.Bot):
 
     def validate_song_arg(self, args):
         """Validate song selection"""
-        default_msg = f'Specify song number (-1 to 131), "category" or "random".  Full list: https://kershner.org/daggerwalk/?tab=songs'
+        default_msg = f'Specify song number (-1 to 131), "category" or "random."  ex - !song 127.  Full list: https://kershner.org/daggerwalk/?tab=songs'
         
         if not args:
             return False, default_msg
@@ -586,19 +586,19 @@ class DaggerfallBot(commands.Bot):
     def validate_weather_arg(self, args):
         """Validate weather selection"""
         if not args or args[0].lower() not in Config.WEATHER_TYPES_MAP:
-            return False, f"Specify weather type: {', '.join(Config.WEATHER_TYPES_MAP.keys())}"
+            return False, f"Specify weather type: {', '.join(Config.WEATHER_TYPES_MAP.keys())}.  ex - !weather snowy"
         return True, None
     
     def validate_levitate_args(self, args):
         """Validate levitate selection"""
         if not args or args[0].lower() not in ["on", "off"]:
-            return False, 'Specify levitate setting: "on" or "off"'
+            return False, 'Specify levitate setting: "on" or "off." ex - !levitate on'
         return True, None
     
     def validate_gravity_args(self, args):
         """Validate gravity setting"""
         if not args or not args[0].isdigit() or not (0 <= int(args[0]) <= 20):
-            return False, 'Set gravity level: 0–20 (0=low, 20=default)'
+            return False, 'Set gravity level: 0–20 (0=low, 20=default).  ex - !gravity 5'
         return True, None
     
     def validate_playvid_args(self, args):
