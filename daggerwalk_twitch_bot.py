@@ -46,7 +46,7 @@ class Config:
     PARAMS_FILE = "parameters.json"
     TWITCH_CHANNEL = "daggerwalk"
     BOT_USERNAME = "daggerwalk_bot"
-    REFRESH_INTERVAL = 300  # 5 minutesa
+    REFRESH_INTERVAL = 300  # 5 minutes
     AUTOSAVE_INTERVAL = 600  # 10 minutes
     CHAT_DELAY = 1.5  # seconds
     VOTING_DURATION = 30  # seconds
@@ -54,6 +54,19 @@ class Config:
     MAX_INPUT_REPEATS = 100
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
     DJANGO_LOG_URL = "https://kershner.org/daggerwalk/log/"
+
+    STREAM_TAGS = [
+        "Retro",
+        "RPG",
+        "PC",
+        "chill",
+        "Cozy",
+        "Interactive",
+        "Exploration",
+        "elderscrolls",
+        "Programming",
+        "Automation"
+    ]
     
     ACTIVE_MODS = [
         "World of Daggerfall", "Interesting Eroded Terrains",
@@ -249,6 +262,8 @@ class DaggerfallBot(commands.Bot):
             return
         self._startup_tasks_started = True
         
+        await self.set_stream_tags()
+        
         self.refresh_task = asyncio.create_task(self.data_refresh_loop())
         self.autosave_task = asyncio.create_task(self.autosave_loop())
         self.message_task = asyncio.create_task(self.message_scheduler())
@@ -292,6 +307,43 @@ class DaggerfallBot(commands.Bot):
         )
 
         await asyncio.gather(info_task, help_task, quest_task)
+
+    async def set_stream_tags(self):
+        """Set Twitch stream tags"""
+        try:
+            client_id, oauth = Config.get_oauth()
+            
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {oauth}",
+                    "Client-Id": client_id
+                }
+                
+                # Get broadcaster ID
+                async with session.get(
+                    f"https://api.twitch.tv/helix/users?login={Config.TWITCH_CHANNEL}",
+                    headers=headers
+                ) as resp:
+                    if resp.status != 200:
+                        logging.error(f"Failed to get user ID: {resp.status}")
+                        return
+                    data = await resp.json()
+                    broadcaster_id = data["data"][0]["id"]
+                
+                # Set tags
+                async with session.patch(
+                    f"https://api.twitch.tv/helix/channels?broadcaster_id={broadcaster_id}",
+                    headers=headers,
+                    json={"tags": Config.STREAM_TAGS}
+                ) as resp:
+                    if resp.status == 204:
+                        logging.info(f"✓ Set stream tags: {', '.join(Config.STREAM_TAGS)}")
+                    else:
+                        text = await resp.text()
+                        logging.error(f"Failed to set tags: {resp.status} - {text}")
+                        
+        except Exception as e:
+            logging.error(f"Error setting stream tags: {e}")
 
 
     async def data_refresh_loop(self):
