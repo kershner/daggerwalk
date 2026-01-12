@@ -778,8 +778,7 @@ class DaggerfallBot(commands.Bot):
         logging.info("Executing BIGHOP command")
         send_game_input(GameKeys.BACK.value, repeat=100)
         send_game_input(GameKeys.WALK.value)
-        send_game_input(GameKeys.JUMP.value)
-
+        self.send_movement(GameKeys.JUMP, repeat=10)
 
     async def use_shotgun(self):
         """Use shotgun weapon by raising weapon, firing, and then lowering it"""
