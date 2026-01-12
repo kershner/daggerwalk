@@ -562,7 +562,7 @@ class DaggerfallBot(commands.Bot):
 
     def validate_song_arg(self, args):
         """Validate song selection"""
-        default_msg = f'Specify song number (-1 to 131), "category" or "random".'
+        default_msg = f'Specify song number (-1 to 131), "category" or "random".  Full list: https://kershner.org/daggerwalk/?tab=songs'
         
         if not args:
             return False, default_msg
