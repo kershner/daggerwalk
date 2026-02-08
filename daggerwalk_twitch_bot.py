@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone, date
-from urllib.parse import quote_plus
 from twitchio.ext import commands
 import pygetwindow as gw
 from enum import Enum
+import bluesky_live
 import subprocess
 import pywinauto
 import aiofiles
@@ -14,6 +14,7 @@ import pytz
 import json
 import time
 import os
+
 
 logging.basicConfig(
     level=logging.INFO, 
@@ -122,6 +123,14 @@ class Config:
         """Return Daggerwalk API key"""
         params = cls.load_params()
         return params.get("daggerwalk_api_key", "")
+
+    @classmethod
+    def get_bluesky_credentials(cls):
+        """Return Bluesky handle and app password"""
+        params = cls.load_params()
+        handle = params.get("BLUESKY_HANDLE", "")
+        password = params.get("BLUESKY_APP_PASSWORD", "")
+        return handle, password
 
 def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
     """Send keyboard input to Daggerfall Unity window"""
@@ -239,6 +248,7 @@ class DaggerfallBot(commands.Bot):
             "ai_enabled": False,
             "camera_mode": "third",
             "next_log_time": None,
+            "bluesky_live_text": "",
         }
         
         self.votable_commands = {
@@ -252,6 +262,11 @@ class DaggerfallBot(commands.Bot):
             "playvid": "play an in-game video",
             "camera": "toggle third-person camera"
         }
+        
+        # Bluesky client initialization
+        self.bluesky_client = None
+        self._init_bluesky()
+
 
     def _update_state(self, key, value):
         """Safely update a local state field and log the change."""
@@ -261,6 +276,18 @@ class DaggerfallBot(commands.Bot):
             logging.info(f"State updated: {key} = {value} (was {old})")
         else:
             logging.warning(f"Attempted to set unknown state key: {key}")
+
+
+    def _init_bluesky(self):
+        try:
+            handle, password = Config.get_bluesky_credentials()
+            self.bluesky_client = bluesky_live.login(handle, password)
+            if self.bluesky_client:
+                logging.info(f"Bluesky logged in: {handle}")
+        except Exception as e:
+            logging.error(f"Bluesky init failed: {e}")
+            self.bluesky_client = None
+
 
     async def event_ready(self):
         logging.info(f"Bot online as {self.nick}")
@@ -276,7 +303,7 @@ class DaggerfallBot(commands.Bot):
         self.message_task = asyncio.create_task(self.message_scheduler())
         self.crash_monitor_task = asyncio.create_task(self.crash_monitor())
         self.side_effects_task = asyncio.create_task(self.side_effects_loop())
-        self.local_state_refresh_task = asyncio.create_task(self.local_state_refresh_loop())
+        self.local_state_refresh_task = asyncio.create_task(self.local_state_refresh_loop())  
 
     async def message_scheduler(self):
         """Schedules periodic info (5m), help (20m), and quest (25m) messages."""
@@ -406,7 +433,6 @@ class DaggerfallBot(commands.Bot):
 
     async def side_effects_loop(self):
         """Run operational side-effects on a steady cadence, decoupled from refresh."""
-        # Wait until we have at least one successful refresh
         await self._state_ready.wait()
         logging.info("Starting side effects loop")
 
@@ -414,26 +440,51 @@ class DaggerfallBot(commands.Bot):
 
         while True:
             try:
-                # Nightly shutdown notice: ensure once-per-day semantics
                 est = pytz.timezone("US/Eastern")
                 now_est = datetime.now(est)
-                midnight_next = (now_est + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+                midnight_next = (now_est + timedelta(days=1)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
                 minutes_until = int((midnight_next - now_est).total_seconds() // 60)
 
-                if 0 < minutes_until <= 10:
-                    if last_shutdown_notice_date != now_est.date():
+                # OFF window: last 10 min before midnight + first 10 min after
+                off_window = (
+                    (0 < minutes_until <= 10)
+                    or (now_est.hour == 0 and now_est.minute < 10)
+                )
+
+                if off_window:
+                    if self.bluesky_client:
+                        await asyncio.to_thread(
+                            bluesky_live.clear_live, self.bluesky_client
+                        )
+
+                    if (
+                        0 < minutes_until <= 10
+                        and last_shutdown_notice_date != now_est.date()
+                    ):
                         last_shutdown_notice_date = now_est.date()
                         if self.connected_channels:
                             await self.connected_channels[0].send(
                                 f"🛌 The Walker will rest for the night in {minutes_until} minutes, "
                                 "at midnight EST. They'll be back in the morning!"
                             )
+                else:
+                    if self.bluesky_client:
+                        title = self.state.get("bluesky_live_text") or "Live"
+                        await asyncio.to_thread(
+                            bluesky_live.ensure_live,
+                            self.bluesky_client,
+                            title,
+                            "",
+                        )
 
             except Exception as e:
                 logging.error(f"side_effects_loop error: {e}")
 
-            # Tweak interval as desired
             await asyncio.sleep(60)
+
 
     async def local_state_refresh_loop(self):
         """Check MapData.json periodically for song changes."""
@@ -1061,26 +1112,26 @@ class DaggerfallBot(commands.Bot):
             logging.error(f"Error reading map data: {e}")
             return {}
 
+    def build_live_text(self, region: str, weather: str, time_str: str) -> str:
+        hour = datetime.strptime(time_str, "%H:%M:%S").hour
+        if 6 <= hour < 12:
+            time_of_day = "morning"
+        elif 12 <= hour < 18:
+            time_of_day = "afternoon"
+        else:
+            time_of_day = "night"
+        return f"Walking through {region} on a {weather.lower()} {time_of_day}"    
+
     async def update_stream_title(self, region: str, weather: str, time_str: str):
         try:
-            hour = datetime.strptime(time_str, "%H:%M:%S").hour
-            if 6 <= hour < 12:
-                time_of_day = "morning"
-            elif 12 <= hour < 18:
-                time_of_day = "afternoon"
-            else:
-                time_of_day = "night"
+            title = self.build_live_text(region, weather, time_str)
 
-            title = f"Walking through {region} on a {weather.lower()} {time_of_day}"
+            client_id, oauth_token = Config.get_oauth()
 
-            client_id, oauth_token = Config.get_oauth()[:2]  # ignore client_secret
-
-            # Remove "oauth:" prefix if present
             if oauth_token.startswith("oauth:"):
                 oauth_token = oauth_token[6:]
 
             async with aiohttp.ClientSession() as session:
-                # Get broadcaster ID
                 async with session.get(
                     "https://api.twitch.tv/helix/users",
                     headers={
@@ -1091,7 +1142,6 @@ class DaggerfallBot(commands.Bot):
                     data = await resp.json()
                     broadcaster_id = data["data"][0]["id"]
 
-                # Update stream title
                 async with session.patch(
                     f"https://api.twitch.tv/helix/channels?broadcaster_id={broadcaster_id}",
                     headers={
@@ -1109,7 +1159,6 @@ class DaggerfallBot(commands.Bot):
 
         except Exception as e:
             logging.error(f"Failed to update stream title: {e}")
-
 
     async def game_info(self):
         """Display game state information (cached only)."""
@@ -1217,6 +1266,8 @@ class DaggerfallBot(commands.Bot):
 
             # Update stream title when we have HH:MM:SS
             if time_hms:
+                live_text = self.build_live_text(region or "", weather or "", time_hms)
+                self._update_state("bluesky_live_text", live_text)
                 await self.update_stream_title(region or "", weather or "", time_hms)
 
         except Exception as e:
