@@ -418,7 +418,7 @@ public class MusicChanger : MonoBehaviour
                 {
                     string categoryArg = args[i].ToLower();
                     if (categoryArg == "world" || categoryArg == "dungeon" || 
-                        categoryArg == "battle" || categoryArg == "misc")
+                        categoryArg == "battle" || categoryArg == "misc" || categoryArg == "off")
                     {
                         if (!validCategories.Contains(categoryArg))
                         {
@@ -427,7 +427,7 @@ public class MusicChanger : MonoBehaviour
                     }
                     else
                     {
-                        return $"MusicChanger: Invalid category '{categoryArg}'. Available categories: all, world, dungeon, battle, misc";
+                        return $"MusicChanger: Invalid category '{categoryArg}'. Available categories: all, world, dungeon, battle, misc, off";
                     }
                 }
             }
@@ -472,7 +472,7 @@ public class MusicChanger : MonoBehaviour
             }
             else
             {
-                return "MusicChanger: No valid categories specified. Available categories: all, world, dungeon, battle, misc";
+                return "MusicChanger: No valid categories specified. Available categories: all, world, dungeon, battle, misc, off";
             }
         }
 
@@ -517,7 +517,7 @@ public class MusicChanger : MonoBehaviour
 
         // Handle category selection
         string lowerArg = args[0].ToLower();
-        if (lowerArg == "world" || lowerArg == "dungeon" || lowerArg == "battle" || lowerArg == "misc" )
+        if (lowerArg == "world" || lowerArg == "dungeon" || lowerArg == "battle" || lowerArg == "misc" || lowerArg == "off" )
         {
             // Find all songs in the specified category
             List<SongFiles> categorySongs = GetSongsInCategory(lowerArg);
@@ -566,7 +566,7 @@ public class MusicChanger : MonoBehaviour
             // Ensure input is a number
             if (!int.TryParse(args[0], out selectedTrack))
             {
-                return "MusicChanger: Invalid track number or category. Use a numeric track ID, 'random', 'shuffle', or a category (world, dungeon, battle, misc).";
+                return "MusicChanger: Invalid track number or category. Use a numeric track ID, 'random', 'shuffle', or a category (world, dungeon, battle, misc, off).";
             }
         }
 
@@ -585,10 +585,9 @@ public class MusicChanger : MonoBehaviour
     // Helper method to get a song's category (used your existing method, but with an int parameter)
     private static string GetSongCategory(int songId)
     {
-        // Map song IDs to categories based on your filtered JSON
+        // Map song IDs to categories based on JSON
         switch (songId)
         {
-            case -1:  // song_none
             case 1:   // song_02fm
             case 3:   // song_03fm
             case 8:   // song_5strong
@@ -683,6 +682,9 @@ public class MusicChanger : MonoBehaviour
             case 116: // song_gshop
             case 131: // song_tavern  
                 return "Misc";
+            
+            case -1:  // song_none
+                return "Off";
                 
             default:
                 return "Unknown"; // Songs not explicitly categorized should not be included in any category
