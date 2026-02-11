@@ -116,7 +116,7 @@ def start_daggerfall():
         time.sleep(1)
 
         logging.info("Starting song shuffle...")
-        pyautogui.write("song shuffle all")
+        pyautogui.write("song shuffle off")
         time.sleep(1)
         pyautogui.press("enter")
         time.sleep(1)

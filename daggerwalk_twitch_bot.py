@@ -730,7 +730,7 @@ class DaggerfallBot(commands.Bot):
             if args and args[0].lower() == "category":
                 # If only "category" is provided without specific categories
                 if len(args) == 1:
-                    await message.channel.send("Choose categories for the song shuffle. Options: world, dungeon, misc, battle, all. Multiple categories supported. Ex: !song category world misc")
+                    await message.channel.send("Choose categories for the song shuffle. Options: world, dungeon, misc, battle, all, off. Multiple categories supported. Ex: !song category world misc")
                     return
                 # If they provided categories, proceed with vote for category shuffle
                 # The validation will be handled in execute_voted_command
