@@ -86,7 +86,7 @@ def start_daggerfall():
 
         logging.info("Loading last save...")
         pyautogui.press("enter")
-        time.sleep(25)  # Allow save to load fully
+        time.sleep(60)  # Allow save to load fully
 
         pyautogui.press("`")  # Open the console (tilde key)
 
