@@ -5,6 +5,7 @@ from enum import Enum
 import bluesky_live
 import subprocess
 import pywinauto
+import pyperclip
 import aiofiles
 import requests
 import logging
@@ -75,7 +76,8 @@ class Config:
         "World of Daggerfall", "Interesting Eroded Terrains",
         "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass",
         "Birds in Daggerfall", "HUD Be Gone",  "Immersive Footsteps", "Eye of the Beholder", 
-        "Render Distance Expander", "Dynamic Ambience", "DIAAMM Part 1"
+        "Render Distance Expander", "Dynamic Ambience", "DIAAMM Part 1", "Animated Water", 
+        "Iliac Puddle No More"
     ]
 
     WEATHER_TYPES_MAP = {
@@ -1082,7 +1084,12 @@ class DaggerfallBot(commands.Bot):
             send_game_input(GameKeys.CONSOLE.value)
             time.sleep(0.5)
             
-            send_game_input(command)  # Send command
+            old_clipboard = pyperclip.paste()
+            try:
+                pyperclip.copy(command)
+                dlg.send_keystrokes("^v")
+            finally:
+                pyperclip.copy(old_clipboard)
             time.sleep(0.5)
             
             # Send ENTER and close console using regular game input
