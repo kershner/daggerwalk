@@ -41,6 +41,8 @@ class GameKeys(Enum):
     ESC = "{ESC}"
     USE = "k"
     CAMERA = "O"
+    CROUCH = "c"
+    CENTER = "{HOME}"
 
 class Config:
     """Bot configuration settings"""
@@ -628,9 +630,11 @@ class DaggerfallBot(commands.Bot):
             "right": lambda: self.handle_movement_arg_required(message, GameKeys.RIGHT, args),
             "up": lambda: self.handle_movement_arg_required(message, GameKeys.UP, args),
             "down": lambda: self.handle_movement_arg_required(message, GameKeys.DOWN, args),
+            "crouch": lambda: self.handle_movement_arg_required(message, GameKeys.CROUCH, args),
             "jump": lambda: self.send_movement(GameKeys.JUMP, repeat=10),
             "stop": lambda: self.handle_movement_arg_required(message, GameKeys.BACK, ["1"]),
             "use": lambda: self.send_movement(GameKeys.USE),
+            "center": lambda: self.send_movement(GameKeys.CENTER),
             "map": self.toggle_map,
             "camera": self.toggle_camera,
             "bighop": self.bighop,
@@ -1380,7 +1384,7 @@ class DaggerfallBot(commands.Bot):
             "💀🌲Daggerwalk Commands: "
             "!walk • !stop • !jump • !left • "
             "!right • !up • !down • !forward • "
-            "!back • !map • !song • !state • "
+            "!back • !crouch • !map • !song • !state • "
             "!more"
         )
         
@@ -1393,7 +1397,7 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "🗡️More Daggerwalk Commands: "
-            "!info • !quest • !use • !weather • !levitate • !toggle_ai • !exit • !gravity • !playvid • !modlist • !shotgun • !camera • !esc"
+            "!info • !quest • !use • !center • !weather • !levitate • !toggle_ai • !exit • !gravity • !playvid • !modlist • !shotgun • !camera • !esc"
         )
         
         await channel.send(combined_message)
