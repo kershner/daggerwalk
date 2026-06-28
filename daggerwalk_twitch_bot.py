@@ -5,7 +5,7 @@ from enum import Enum
 import bluesky_live
 import subprocess
 import pywinauto
-import pyperclip
+import pyautogui
 import aiofiles
 import requests
 import logging
@@ -53,7 +53,7 @@ class Config:
     REFRESH_INTERVAL = 300  # 5 minutes
     AUTOSAVE_INTERVAL = 600  # 10 minutes
     CHAT_DELAY = 1.5  # seconds
-    VOTING_DURATION = 30  # seconds
+    VOTING_DURATION = 20  # seconds
     AUTHORIZED_USERS = ["billcrystals", "daggerwalk", "daggerwalk_bot"]
     MAX_INPUT_REPEATS = 100
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
@@ -1084,12 +1084,7 @@ class DaggerfallBot(commands.Bot):
             send_game_input(GameKeys.CONSOLE.value)
             time.sleep(0.5)
             
-            old_clipboard = pyperclip.paste()
-            try:
-                pyperclip.copy(command)
-                dlg.send_keystrokes("^v")
-            finally:
-                pyperclip.copy(old_clipboard)
+            pyautogui.write(command)
             time.sleep(0.5)
             
             # Send ENTER and close console using regular game input
