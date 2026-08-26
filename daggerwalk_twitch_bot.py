@@ -241,7 +241,7 @@ class DaggerfallBot(commands.Bot):
         self.votes = {}
         self._state_ready = asyncio.Event()
         self._startup_tasks_started = False
-        self._last_completed_quest_id = None
+        self._last_completed_quest_ids = set()
 
         self.state = {
             "song": None,
@@ -412,24 +412,22 @@ class DaggerfallBot(commands.Bot):
             await asyncio.sleep(Config.REFRESH_INTERVAL)
 
     async def _check_and_announce_quest_completion(self, new_data):
-        """Check if quest was completed and announce if so"""
+        """Check for newly completed quests and announce each one."""
         try:
-            quest_completed = new_data.get('quest_completed', False)
-            completed_quest = new_data.get('completed_quest') or {}
-            completed_quest_id = completed_quest.get('id') if completed_quest else None
-            
-            logging.info(f"Quest check - completed: {quest_completed}, ID: {completed_quest_id}, last ID: {getattr(self, '_last_completed_quest_id', None)}")
-            
-            if (quest_completed and completed_quest_id and 
-                completed_quest_id != getattr(self, '_last_completed_quest_id', None)):
-                
-                completion_line, _ = self._format_quest_lines_from_response(new_data)
+            _, completed_quests = self._get_quests_from_response(new_data)
+            completed_ids = [quest.get("id") for quest in completed_quests]
+            logging.info(f"Quest check - completed IDs: {completed_ids}")
+
+            for completed_quest in completed_quests:
+                completed_quest_id = completed_quest.get("id")
+                if not completed_quest_id or completed_quest_id in self._last_completed_quest_ids:
+                    continue
+
+                completion_line = self._format_quest_completion(completed_quest)
                 if completion_line and self.connected_channels:
                     await self.connected_channels[0].send(completion_line)
-                    self._last_completed_quest_id = completed_quest_id
+                    self._last_completed_quest_ids.add(completed_quest_id)
                     logging.info(f"Quest completion announced: {completed_quest_id}")
-                else:
-                    logging.warning(f"Quest completed but no completion_line generated or no channels")
             
         except Exception as e:
             logging.error(f"_check_and_announce_quest_completion error: {e}")
@@ -649,7 +647,7 @@ class DaggerfallBot(commands.Bot):
             "killall": self.killall,
             "info": self.game_info,
             "more": self.more_commands,
-            "quest": self.quest,
+            "quest": lambda: self.quest(args),
             "state": self.show_state,
         }
 
@@ -1429,63 +1427,60 @@ class DaggerfallBot(commands.Bot):
         logging.info(f"Executing admin command: {' '.join(args)}")
         self.send_console_command(" ".join(args))
 
-    def _format_quest_lines_from_response(self, response_data):
-        """Return (completion_line, current_line) based on latest response_data."""
-        try:
-            quest_completed = bool(response_data.get("quest_completed"))
-            completed_quest = response_data.get("completed_quest") or {}
+    def _get_quests_from_response(self, response_data):
+        """Return active and completed quest lists with legacy API fallbacks."""
+        active_quests = response_data.get("active_quests")
+        if active_quests is None:
             current_quest = response_data.get("current_quest") or {}
+            active_quests = [current_quest] if current_quest else []
 
-            # Build "current_quest" line
-            current_line = ""
-            if current_quest:
-                desc = (current_quest.get("description") or "").replace(".", "").strip()
-                poi = current_quest.get("poi") or {}
-                poi_region_obj = poi.get("region") or {}
+        completed_quests = response_data.get("completed_quests")
+        if completed_quests is None:
+            completed_quest = response_data.get("completed_quest") or {}
+            completed_quests = [completed_quest] if response_data.get("quest_completed") and completed_quest else []
 
-                # Prefer nested poi.region.name; fall back to old top-level region_name if present
-                region_name = (
-                    current_quest.get("region_name")
-                    or (poi_region_obj.get("name") if isinstance(poi_region_obj, dict) else None)
-                    or ""
-                ).strip()
+        active_quests.sort(key=lambda quest: quest.get("slot") or 99)
+        return active_quests, completed_quests
 
-                url = "https://kershner.org/daggerwalk/quest"
-                current_line = f"🧭Current quest: {desc} in {region_name} 🗺️Map: {url}"
+    def _format_quest_summary(self, active_quests):
+        parts = []
+        for quest in active_quests:
+            poi = quest.get("poi") or {}
+            region = poi.get("region") or {}
+            destination = f"{poi.get('emoji') or ''}{poi.get('name') or 'Unknown'}"
+            if region.get("name"):
+                destination += f", {region['name']}"
+            parts.append(f"[{quest.get('slot')}] {destination} — {quest.get('xp', 0)} XP")
 
-            # Build "completed_quest" line
-            completion_line = ""
-            if quest_completed:
-                cq_name = (
-                    completed_quest.get("name")
-                    or completed_quest.get("poi_name")
-                    or current_quest.get("poi_name")
-                    or "Quest"
-                )
-                cq_xp = (
-                    completed_quest.get("xp")
-                    or completed_quest.get("xp_awarded")
-                    or current_quest.get("xp")
-                )
+        if not parts:
+            return "The Walker does not currently have any active quests."
+        return f"🧭 {len(parts)} active quests: {' • '.join(parts)} 🗺️Map: https://kershner.org/daggerwalk"
 
-                # Compose: "✅{name} completed!  {xp} XP awarded!  {current_line}"
-                parts = [f"✅{cq_name} completed!"]
-                if cq_xp not in (None, "", 0):
-                    parts.append(f"{cq_xp} XP awarded!")
-                if current_line:
-                    parts.append(current_line)
+    def _format_quest_detail(self, quest):
+        poi = quest.get("poi") or {}
+        description = (quest.get("description") or quest.get("quest_name") or "Quest").strip()
+        giver = quest.get("quest_giver_name")
+        line = f"🧭Quest {quest.get('slot')}: {description}"
+        if giver:
+            line += f" — {giver}"
+        line += f" — {quest.get('xp', 0)} XP"
 
-                # Join with two spaces between segments
-                completion_line = "  ".join(parts)
+        x = poi.get("map_pixel_x")
+        y = poi.get("map_pixel_y")
+        url = "https://kershner.org/daggerwalk"
+        if x is not None and y is not None:
+            url += f"?map_focus_x={x}&map_focus_y={y}"
+        return f"{line} 🗺️Map: {url}"
 
-            return completion_line, current_line
+    def _format_quest_completion(self, quest):
+        name = quest.get("quest_name") or quest.get("poi_name") or "Quest"
+        line = f"✅Quest {quest.get('slot')}: {name} completed!"
+        if quest.get("xp") not in (None, "", 0):
+            line += f"  {quest['xp']} XP awarded!"
+        return line
 
-        except Exception as e:
-            logging.error(f"_format_quest_lines_from_response error: {e}")
-            return "", ""
-
-    async def quest(self):
-        """Report current quest (and most recent completion if present)."""
+    async def quest(self, args=None):
+        """Report all active quests, or details for one stable slot."""
         await self.refresh_now()
         
         try:
@@ -1497,14 +1492,21 @@ class DaggerfallBot(commands.Bot):
                         await self.connected_channels[0].send("No quest info available yet.")
                     return
 
-            completion_line, current_line = self._format_quest_lines_from_response(self._latest_response_data)
+            active_quests, _ = self._get_quests_from_response(self._latest_response_data)
 
             if self.connected_channels:
-                # Prefer showing current quest; include completion if the last update completed one
-                if current_line:
-                    await self.connected_channels[0].send(current_line)
-                if completion_line:
-                    await self.connected_channels[0].send(completion_line)
+                if args:
+                    if len(args) != 1 or args[0] not in ("1", "2", "3"):
+                        await self.connected_channels[0].send("Usage: !quest or !quest <1-3>")
+                        return
+                    slot = int(args[0])
+                    selected = next((quest for quest in active_quests if quest.get("slot") == slot), None)
+                    if not selected:
+                        await self.connected_channels[0].send(f"Quest slot {slot} is not active yet.")
+                        return
+                    await self.connected_channels[0].send(self._format_quest_detail(selected))
+                else:
+                    await self.connected_channels[0].send(self._format_quest_summary(active_quests))
 
         except Exception as e:
             logging.error(f"!quest error: {e}")
