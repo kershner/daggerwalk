@@ -77,7 +77,6 @@ class Config:
         "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass",
         "Birds in Daggerfall", "HUD Be Gone",  "Immersive Footsteps", "Eye of the Beholder", 
         "Render Distance Expander", "Dynamic Ambience", "DIAAMM Part 1", "Animated Water", 
-        "Iliac Puddle No More"
     ]
 
     WEATHER_TYPES_MAP = {

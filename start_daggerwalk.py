@@ -86,9 +86,11 @@ def start_daggerfall():
 
         logging.info("Loading last save...")
         pyautogui.press("enter")
-        time.sleep(60)  # Allow save to load fully
+        time.sleep(45)  # Allow save to load fully
 
+        time.sleep(1)
         pyautogui.press("`")  # Open the console (tilde key)
+        time.sleep(1)
 
         # logging.info("Enabling God Mode...")
         # time.sleep(1)
