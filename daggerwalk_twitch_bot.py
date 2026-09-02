@@ -92,6 +92,12 @@ class Config:
 
     WEATHER_EMOJIS = {"Sunny": "☀️", "Clear": "🌙", "Overcast": "🌥️", "Cloudy": "☁️", "Foggy": "🌫️",
                         "Rainy": "🌧️", "Snowy": "🌨️", "Thunderstorm": "⛈️"}
+
+    WEATHER_DISPLAY_NAMES = {"Thunderstorm": "Thunderstorming"}
+
+    @classmethod
+    def get_weather_display(cls, weather: str) -> str:
+        return cls.WEATHER_DISPLAY_NAMES.get(weather.title(), weather)
     
     SEASON_EMOJIS = {"Winter": "☃️", "Spring": "🌸", "Summer": "🌻", "Autumn": "🍂"}
 
@@ -1074,7 +1080,8 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         weather_emoji = Config.WEATHER_EMOJIS.get(weather_choice.title(), "🌈")
-        await channel.send(f'Weather changed to: {weather_emoji}{weather_choice.title()}!')
+        weather_display = Config.get_weather_display(weather_choice)
+        await channel.send(f'Weather changed to: {weather_emoji}{weather_display}!')
 
     async def levitate(self, levitate_choice):
         """Toggle levitatation on/off"""
@@ -1226,19 +1233,59 @@ class DaggerfallBot(commands.Bot):
             logging.error(f"Error reading map data: {e}")
             return {}
 
-    def build_live_text(self, region: str, weather: str, time_str: str) -> str:
-        hour = datetime.strptime(time_str, "%H:%M:%S").hour
+    @staticmethod
+    def get_qualified_season(date_str: str) -> str:
+        """Return the early/mid/late season represented by a Daggerfall date."""
+        season_map = [
+            ("Winter", ["eveningstar", "morningstar", "sunsdawn"]),
+            ("Spring", ["firstseed", "rainshand", "secondseed"]),
+            ("Summer", ["midyear", "sunsheight", "lastseed"]),
+            ("Autumn", ["hearthfire", "frostfall", "sunsdusk"]),
+        ]
+
+        try:
+            month = date_str.split(',')[1].strip().split(' ', 1)[1]
+            month_key = month.lower().replace("'", "").replace(" ", "")
+            for season, months in season_map:
+                if month_key in months:
+                    phase = ["early", "mid", "late"][months.index(month_key)]
+                    return f"{phase} {season}"
+        except (AttributeError, IndexError):
+            pass
+
+        return ""
+
+    def build_live_text(
+        self,
+        region: str,
+        weather: str,
+        time_str: str,
+        date_str: str = "",
+    ) -> str:
+        game_time = datetime.strptime(time_str, "%H:%M:%S")
+        hour = game_time.hour
         if 6 <= hour < 12:
             time_of_day = "morning"
         elif 12 <= hour < 18:
             time_of_day = "afternoon"
         else:
             time_of_day = "night"
-        return f"Walking through {region} on a {weather.lower()} {time_of_day}"    
+        qualified_season = self.get_qualified_season(date_str)
+        weather_display = Config.get_weather_display(weather).lower()
+        conditions = " ".join(filter(None, [weather_display, qualified_season, time_of_day]))
+        clock_time = game_time.strftime("%I:%M %p").lstrip("0").lower()
+        clock_time = clock_time.replace(":00 ", " ")
+        return f"Walking through {region} on a {conditions} ({clock_time})"
 
-    async def update_stream_title(self, region: str, weather: str, time_str: str):
+    async def update_stream_title(
+        self,
+        region: str,
+        weather: str,
+        time_str: str,
+        date_str: str = "",
+    ):
         try:
-            title = self.build_live_text(region, weather, time_str)
+            title = self.build_live_text(region, weather, time_str, date_str)
 
             client_id, oauth_token = Config.get_oauth()
 
@@ -1338,6 +1385,7 @@ class DaggerfallBot(commands.Bot):
 
             # Emojis
             weather_emoji = Config.WEATHER_EMOJIS.get(weather, "🌈")
+            weather_display = Config.get_weather_display(weather)
             season_emoji = Config.SEASON_EMOJIS.get(season, "❓")
 
             # Music info
@@ -1363,7 +1411,7 @@ class DaggerfallBot(commands.Bot):
                 f"⌚{time_12hr}" if time_12hr else "",
                 f"📅{date_val}" if date_val else "",
                 f"{season_emoji}{season}" if season else "",
-                f"{weather_emoji}{weather}" if weather else "",
+                f"{weather_emoji}{weather_display}" if weather else "",
                 music_info,
                 map_link,
             ]))
@@ -1380,9 +1428,13 @@ class DaggerfallBot(commands.Bot):
 
             # Update stream title when we have HH:MM:SS
             if time_hms:
-                live_text = self.build_live_text(region or "", weather or "", time_hms)
+                live_text = self.build_live_text(
+                    region or "", weather or "", time_hms, date_str
+                )
                 self._update_state("bluesky_live_text", live_text)
-                await self.update_stream_title(region or "", weather or "", time_hms)
+                await self.update_stream_title(
+                    region or "", weather or "", time_hms, date_str
+                )
 
         except Exception as e:
             logging.error(f"Info error: {e}")
