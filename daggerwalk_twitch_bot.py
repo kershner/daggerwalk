@@ -1419,6 +1419,7 @@ class DaggerfallBot(commands.Bot):
             weather_emoji = Config.WEATHER_EMOJIS.get(weather, "🌈")
             weather_display = Config.get_weather_display(weather)
             season_emoji = Config.SEASON_EMOJIS.get(season, "❓")
+            season_display = self.get_qualified_season(date_str) or season
 
             # Music info
             track_id = getattr(self, '_track_map', {}).get(current_song, None)
@@ -1442,7 +1443,7 @@ class DaggerfallBot(commands.Bot):
                 location_part,
                 f"⌚{time_12hr}" if time_12hr else "",
                 f"📅{date_val}" if date_val else "",
-                f"{season_emoji}{season}" if season else "",
+                f"{season_emoji}{season_display}" if season_display else "",
                 f"{weather_emoji}{weather_display}" if weather else "",
                 music_info,
                 map_link,

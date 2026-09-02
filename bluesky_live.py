@@ -11,7 +11,7 @@ MAX_MINUTES = 240
 REFRESH_EARLY = timedelta(minutes=5)
 
 LIVE_URI = "https://www.twitch.tv/daggerwalk"
-JOURNEY_URI = "https://kershner.org/daggerwalk"
+DAGGERWALK_URI = "https://kershner.org/daggerwalk"
 
 
 def login(handle: str, app_password: str) -> Client | None:
@@ -96,13 +96,18 @@ def build_quest_completion_post(quest: dict) -> tuple[str, str]:
     quest_name = quest.get("quest_name") or quest.get("poi_name") or "Quest"
     quest_giver = (quest.get("quest_giver_name") or "").strip()
     xp = quest.get("xp")
+    participant_count = quest.get("participant_count")
 
     lines = [f"✅ Quest complete: {quest_name}!"]
     if quest_giver:
         lines.extend(["", f"Quest given by {quest_giver}"])
     if xp not in (None, ""):
-        lines.append(f"⚔️ {xp} XP awarded")
-    lines.extend(["", JOURNEY_URI])
+        reward = f"⚔️ {xp} XP awarded"
+        if participant_count is not None:
+            walker_label = "walker" if participant_count == 1 else "walkers"
+            reward += f" to {participant_count} {walker_label}"
+        lines.append(reward)
+    lines.extend(["", quest_completion_uri(quest)])
 
     alt = (
         f"Portrait of {quest_giver}, who gave The Walker the completed "
@@ -114,10 +119,16 @@ def build_quest_completion_post(quest: dict) -> tuple[str, str]:
     return "\n".join(lines), alt
 
 
+def quest_completion_uri(quest: dict) -> str:
+    quest_id = quest.get("id")
+    return f"{DAGGERWALK_URI}/quests/{quest_id}/" if quest_id else DAGGERWALK_URI
+
+
 def post_quest_completion(c: Client, quest: dict, completion_key: str) -> None:
     """Publish or replace one idempotent quest-completion post."""
     text, alt = build_quest_completion_post(quest)
-    url_start = text.index(JOURNEY_URI)
+    quest_uri = quest_completion_uri(quest)
+    url_start = text.index(quest_uri)
     record = {
         "$type": "app.bsky.feed.post",
         "text": text,
@@ -125,11 +136,11 @@ def post_quest_completion(c: Client, quest: dict, completion_key: str) -> None:
         "facets": [{
             "index": {
                 "byteStart": len(text[:url_start].encode("utf-8")),
-                "byteEnd": len(text[:url_start + len(JOURNEY_URI)].encode("utf-8")),
+                "byteEnd": len(text[:url_start + len(quest_uri)].encode("utf-8")),
             },
             "features": [{
                 "$type": "app.bsky.richtext.facet#link",
-                "uri": JOURNEY_URI,
+                "uri": quest_uri,
             }],
         }],
     }
