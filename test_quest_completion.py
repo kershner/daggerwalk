@@ -2,7 +2,7 @@ import asyncio
 import sys
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 # The production module imports the optional Bluesky client at module load time. It is
@@ -76,6 +76,71 @@ def make_bot(channel=None):
 
 
 class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_background_refresh_sends_info_only_after_success(self):
+        bot = make_bot()
+        bot._state_ready = asyncio.Event()
+        bot.refresh_now = AsyncMock(return_value=True)
+        bot.game_info = AsyncMock()
+        bot.check_if_bot_is_stuck = AsyncMock()
+
+        with patch.object(
+            bot_module.asyncio,
+            "sleep",
+            AsyncMock(side_effect=asyncio.CancelledError),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.data_refresh_loop()
+
+        bot.game_info.assert_awaited_once()
+        self.assertTrue(bot._state_ready.is_set())
+
+    async def test_failed_background_refresh_does_not_send_info(self):
+        bot = make_bot()
+        bot._state_ready = asyncio.Event()
+        bot.refresh_now = AsyncMock(return_value=False)
+        bot.game_info = AsyncMock()
+        bot.check_if_bot_is_stuck = AsyncMock()
+
+        with patch.object(
+            bot_module.asyncio,
+            "sleep",
+            AsyncMock(side_effect=asyncio.CancelledError),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.data_refresh_loop()
+
+        bot.game_info.assert_not_awaited()
+        self.assertFalse(bot._state_ready.is_set())
+
+    async def test_quest_summary_uses_bullets_and_lists_detail_commands(self):
+        bot = make_bot()
+        summary = bot._format_quest_summary([
+            {
+                "slot": 1,
+                "xp": 25,
+                "poi": {"emoji": "⚓", "name": "Zagizar", "region": {"name": "Mournoth"}},
+            },
+            {
+                "slot": 2,
+                "xp": 45,
+                "poi": {"emoji": "🏹", "name": "Nozim Orchard", "region": {"name": "Sentinel"}},
+            },
+            {
+                "slot": 3,
+                "xp": 50,
+                "poi": {"emoji": "🗿", "name": "The Greenton Plantation", "region": {"name": "Ykalon"}},
+            },
+        ])
+
+        self.assertEqual(
+            summary,
+            "🧭 3 active quests: [1] ⚓Zagizar, Mournoth • 25 XP • "
+            "[2] 🏹Nozim Orchard, Sentinel • 45 XP • "
+            "[3] 🗿The Greenton Plantation, Ykalon • 50 XP "
+            "Details: !quest 1 • !quest 2 • !quest 3 "
+            "🗺️Map: https://kershner.org/daggerwalk",
+        )
+
     async def test_on_demand_refresh_announces_completion(self):
         channel = RecordingChannel()
         bot = make_bot(channel)

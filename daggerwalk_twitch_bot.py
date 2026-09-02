@@ -317,13 +317,12 @@ class DaggerfallBot(commands.Bot):
         self.local_state_refresh_task = asyncio.create_task(self.local_state_refresh_loop())  
 
     async def message_scheduler(self):
-        """Schedules periodic info (5m), help (20m), and quest (25m) messages."""
+        """Schedule periodic help (20m) and quest (25m) messages."""
         logging.info("Starting message scheduler")
 
         # Wait until we have first successful refresh so we don't announce early/empty
         await self._state_ready.wait()
 
-        INFO_INTERVAL = 300      # 5 minutes
         HELP_INTERVAL = 1200     # 20 minutes
         QUEST_INTERVAL = 1500    # 25 minutes
 
@@ -340,10 +339,6 @@ class DaggerfallBot(commands.Bot):
                     logging.error(f"periodic message error: {e}")
                 await asyncio.sleep(interval)
 
-        # Small initial delay for !info so it doesn't race with manual commands at startup
-        info_task = asyncio.create_task(
-            run_periodic_message(self.game_info, INFO_INTERVAL, initial_delay=10)
-        )
         help_task = asyncio.create_task(
             run_periodic_message(self.help, HELP_INTERVAL, initial_delay=HELP_OFFSET)
         )
@@ -351,7 +346,7 @@ class DaggerfallBot(commands.Bot):
             run_periodic_message(self.quest, QUEST_INTERVAL, initial_delay=QUEST_OFFSET)
         )
 
-        await asyncio.gather(info_task, help_task, quest_task)
+        await asyncio.gather(help_task, quest_task)
 
     async def set_stream_tags(self):
         """Set Twitch stream tags"""
@@ -401,6 +396,7 @@ class DaggerfallBot(commands.Bot):
                     if not first_success:
                         first_success = True
                         self._state_ready.set()  # unblocks scheduler/commands that want initial state
+                    await self.game_info()
 
                 # Stuck check (run on a calm interval, not on every command/refresh)
                 await self.check_if_bot_is_stuck()
@@ -1646,11 +1642,17 @@ class DaggerfallBot(commands.Bot):
             destination = f"{poi.get('emoji') or ''}{poi.get('name') or 'Unknown'}"
             if region.get("name"):
                 destination += f", {region['name']}"
-            parts.append(f"[{quest.get('slot')}] {destination} — {quest.get('xp', 0)} XP")
+            parts.append(f"[{quest.get('slot')}] {destination} • {quest.get('xp', 0)} XP")
 
         if not parts:
             return "The Walker does not currently have any active quests."
-        return f"🧭 {len(parts)} active quests: {' • '.join(parts)} 🗺️Map: https://kershner.org/daggerwalk"
+        detail_commands = " • ".join(
+            f"!quest {quest.get('slot')}" for quest in active_quests
+        )
+        return (
+            f"🧭 {len(parts)} active quests: {' • '.join(parts)} "
+            f"Details: {detail_commands} 🗺️Map: https://kershner.org/daggerwalk"
+        )
 
     def _format_quest_detail(self, quest):
         poi = quest.get("poi") or {}
