@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sys
 import types
 import unittest
@@ -12,6 +13,7 @@ bluesky_stub.login = lambda *args: None
 bluesky_stub.clear_live = lambda *args: None
 bluesky_stub.ensure_live = lambda *args: None
 bluesky_stub.post_quest_completion = lambda *args: None
+bluesky_stub.new_tid = lambda: "3jzfcijpj2z2a"
 sys.modules.setdefault("bluesky_live", bluesky_stub)
 
 import daggerwalk_twitch_bot as bot_module
@@ -167,7 +169,7 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             channel.messages,
             [
                 "✅Quest 2: Reach Daggerfall completed!  250 XP awarded!",
-                "🆕New Quest 2: Travel to Wayrest — Lady Brisienna — 30 XP "
+                "📜New Quest 2: Travel to Wayrest — Lady Brisienna — 30 XP "
                 "🗺️Map: https://kershner.org/daggerwalk?map_focus_x=12&map_focus_y=34",
             ],
         )
@@ -194,7 +196,7 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             channel.messages,
             [
                 "✅Quest 1: Wayrest completed!",
-                "🆕New Quest 1: Travel to Daggerfall — 15 XP "
+                "📜New Quest 1: Travel to Daggerfall — 15 XP "
                 "🗺️Map: https://kershner.org/daggerwalk",
             ],
         )
@@ -223,7 +225,7 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             channel.messages,
             [
                 "✅Quest 3: Sentinel completed!",
-                "🆕New Quest 3: Travel to Wayrest — 20 XP "
+                "📜New Quest 3: Travel to Wayrest — 20 XP "
                 "🗺️Map: https://kershner.org/daggerwalk",
             ],
         )
@@ -256,7 +258,7 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             channel.messages,
             [
                 "✅Quest 2: Travel to Wayrest completed!  25 XP awarded!",
-                "🆕New Quest 2: Travel to Sentinel — 35 XP "
+                "📜New Quest 2: Travel to Sentinel — 35 XP "
                 "🗺️Map: https://kershner.org/daggerwalk",
             ],
         )
@@ -284,7 +286,7 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             bot_module.bluesky_live,
             "post_quest_completion",
             side_effect=RuntimeError("temporary Bluesky failure"),
-        ):
+        ) as first_post:
             await bot._check_and_announce_quest_completion(payload)
 
         self.assertEqual(len(channel.messages), 2)
@@ -292,6 +294,11 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(event["completion_sent"])
         self.assertTrue(event["new_quest_sent"])
         self.assertFalse(event["bluesky_sent"])
+        self.assertRegex(
+            event["bluesky_rkey"],
+            re.compile(r"^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$"),
+        )
+        first_rkey = first_post.call_args.args[2]
 
         with patch.object(bot_module.bluesky_live, "post_quest_completion") as post:
             await bot._check_and_announce_quest_completion({
@@ -300,6 +307,7 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             })
 
         post.assert_called_once()
+        self.assertEqual(post.call_args.args[2], first_rkey)
         self.assertEqual(len(channel.messages), 2)
         self.assertEqual(bot._pending_quest_completions, {})
 

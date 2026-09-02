@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+import re
 from unittest.mock import Mock, patch
 
 
@@ -12,6 +13,11 @@ import bluesky_live
 
 
 class QuestCompletionPostTests(unittest.TestCase):
+    def test_new_tid_is_a_valid_feed_post_record_key(self):
+        rkey = bluesky_live.new_tid()
+
+        self.assertRegex(rkey, re.compile(r"^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$"))
+
     def test_post_text_and_portrait_alt_match_requested_format(self):
         text, alt = bluesky_live.build_quest_completion_post({
             "id": 42,
@@ -76,12 +82,12 @@ class QuestCompletionPostTests(unittest.TestCase):
         }
 
         with patch.object(bluesky_live.requests, "get", return_value=response):
-            bluesky_live.post_quest_completion(client, quest, "id:42")
+            bluesky_live.post_quest_completion(client, quest, "3jzfcijpj2z2a")
 
         put_data = repo.put_record.call_args.kwargs["data"]
         record = put_data["record"]
         self.assertEqual(put_data["collection"], "app.bsky.feed.post")
-        self.assertTrue(put_data["rkey"].startswith("quest-completion-"))
+        self.assertEqual(put_data["rkey"], "3jzfcijpj2z2a")
         self.assertEqual(record["embed"]["images"][0]["image"], "portrait-blob")
         self.assertEqual(
             record["embed"]["images"][0]["alt"],

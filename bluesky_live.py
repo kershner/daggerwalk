@@ -1,9 +1,10 @@
 # bluesky_live.py
 from datetime import datetime, timedelta, timezone
-from hashlib import sha256
 from io import BytesIO
 from atproto import Client
 import requests
+import secrets
+import time
 
 STATUS_COLL = "app.bsky.actor.status"
 STATUS_RKEY = "self"
@@ -12,6 +13,7 @@ REFRESH_EARLY = timedelta(minutes=5)
 
 LIVE_URI = "https://www.twitch.tv/daggerwalk"
 DAGGERWALK_URI = "https://kershner.org/daggerwalk"
+TID_ALPHABET = "234567abcdefghijklmnopqrstuvwxyz"
 
 
 def login(handle: str, app_password: str) -> Client | None:
@@ -24,6 +26,16 @@ def login(handle: str, app_password: str) -> Client | None:
 
 def _now_z() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def new_tid() -> str:
+    """Return a valid AT Protocol timestamp identifier for a record key."""
+    value = ((time.time_ns() // 1_000) << 10) | secrets.randbits(10)
+    encoded = []
+    for _ in range(13):
+        encoded.append(TID_ALPHABET[value & 31])
+        value >>= 5
+    return "".join(reversed(encoded))
 
 
 def _clamp(s: str, n: int) -> str:
@@ -124,7 +136,7 @@ def quest_completion_uri(quest: dict) -> str:
     return f"{DAGGERWALK_URI}/quests/{quest_id}/" if quest_id else DAGGERWALK_URI
 
 
-def post_quest_completion(c: Client, quest: dict, completion_key: str) -> None:
+def post_quest_completion(c: Client, quest: dict, rkey: str) -> None:
     """Publish or replace one idempotent quest-completion post."""
     text, alt = build_quest_completion_post(quest)
     quest_uri = quest_completion_uri(quest)
@@ -155,12 +167,9 @@ def post_quest_completion(c: Client, quest: dict, completion_key: str) -> None:
             "images": [{"image": blob.blob, "alt": _clamp(alt, 1000)}],
         }
 
-    # A deterministic record key makes retries safe even if the process exits before
-    # its local outbox state is saved.
-    digest = sha256(completion_key.encode("utf-8")).hexdigest()[:24]
     c.com.atproto.repo.put_record(data={
         "repo": c.me.did,
         "collection": "app.bsky.feed.post",
-        "rkey": f"quest-completion-{digest}",
+        "rkey": rkey,
         "record": record,
     })

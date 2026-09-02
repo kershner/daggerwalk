@@ -493,12 +493,17 @@ class DaggerfallBot(commands.Bot):
 
             if not event.get("bluesky_sent"):
                 if self.bluesky_client:
+                    # Feed-post record keys must be TIDs. Persist one before the
+                    # request so every retry targets the same record.
+                    if not event.get("bluesky_rkey"):
+                        event["bluesky_rkey"] = bluesky_live.new_tid()
+                        self._save_quest_completion_state()
                     try:
                         await asyncio.to_thread(
                             bluesky_live.post_quest_completion,
                             self.bluesky_client,
                             completed_quest,
-                            completion_key,
+                            event["bluesky_rkey"],
                         )
                     except Exception:
                         logging.exception(
@@ -1681,7 +1686,7 @@ class DaggerfallBot(commands.Bot):
         """Format the replacement quest paired with a completion announcement."""
         poi = quest.get("poi") or {}
         name = quest.get("quest_name") or quest.get("description") or "Quest"
-        line = f"🆕New Quest {quest.get('slot')}: {name}"
+        line = f"📜New Quest {quest.get('slot')}: {name}"
         giver = quest.get("quest_giver_name")
         if giver:
             line += f" — {giver}"
