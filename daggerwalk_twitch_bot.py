@@ -58,6 +58,7 @@ class Config:
     MAX_INPUT_REPEATS = 100
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
     DJANGO_LOG_URL = "https://kershner.org/daggerwalk/log/"
+    QUEST_COMPLETION_STATE_FILE = "quest_completion_state.json"
 
     STREAM_TAGS = [
         "Retro",
@@ -241,7 +242,10 @@ class DaggerfallBot(commands.Bot):
         self.votes = {}
         self._state_ready = asyncio.Event()
         self._startup_tasks_started = False
-        self._last_completed_quest_ids = set()
+        self._refresh_lock = asyncio.Lock()
+        self._announced_quest_completion_keys = set()
+        self._pending_quest_completions = {}
+        self._load_quest_completion_state()
 
         self.state = {
             "song": None,
@@ -389,18 +393,7 @@ class DaggerfallBot(commands.Bot):
         first_success = False
         while True:
             try:
-                data = await self.get_map_json_data()
-                response = await asyncio.to_thread(post_to_django, data)
-                if response and response.status_code == 201:
-                    new_data = response.json()
-                    
-                    # Check for NEW quest completion BEFORE updating cache
-                    await self._check_and_announce_quest_completion(new_data)
-                    
-                    # Then update cache
-                    self._latest_response_data = new_data
-                    self._latest_response_at = datetime.now(timezone.utc)
-
+                if await self.refresh_now():
                     if not first_success:
                         first_success = True
                         self._state_ready.set()  # unblocks scheduler/commands that want initial state
@@ -412,25 +405,140 @@ class DaggerfallBot(commands.Bot):
             await asyncio.sleep(Config.REFRESH_INTERVAL)
 
     async def _check_and_announce_quest_completion(self, new_data):
-        """Check for newly completed quests and announce each one."""
+        """Queue newly completed quests and deliver all pending announcements."""
         try:
-            _, completed_quests = self._get_quests_from_response(new_data)
-            completed_ids = [quest.get("id") for quest in completed_quests]
-            logging.info(f"Quest check - completed IDs: {completed_ids}")
+            active_quests, completed_quests = self._get_quests_from_response(new_data)
+            active_quests_by_slot = {
+                quest.get("slot"): quest
+                for quest in active_quests
+                if quest.get("slot") is not None
+            }
+            logging.info(
+                "Quest check - completion keys: %s",
+                [self._quest_completion_key(quest) for quest in completed_quests],
+            )
 
             for completed_quest in completed_quests:
-                completed_quest_id = completed_quest.get("id")
-                if not completed_quest_id or completed_quest_id in self._last_completed_quest_ids:
+                completion_key = self._quest_completion_key(completed_quest)
+                if completion_key in self._announced_quest_completion_keys:
+                    continue
+                self._pending_quest_completions.setdefault(
+                    completion_key,
+                    {
+                        "completed_quest": completed_quest,
+                        "new_quest": active_quests_by_slot.get(completed_quest.get("slot")),
+                        "completion_sent": False,
+                    },
+                )
+
+            # A pending event restored after a crash might not yet have its replacement.
+            # Enrich it from the current active quest in the same stable slot.
+            for event in self._pending_quest_completions.values():
+                completed_quest = event.get("completed_quest") or {}
+                if not event.get("new_quest"):
+                    event["new_quest"] = active_quests_by_slot.get(completed_quest.get("slot"))
+
+            # Persist before attempting Twitch delivery. If the process exits or Twitch is
+            # disconnected, the announcement will be retried after the next startup/refresh.
+            if completed_quests:
+                self._save_quest_completion_state()
+
+            await self._drain_quest_completion_outbox()
+        except Exception:
+            logging.exception("_check_and_announce_quest_completion error")
+
+    def _quest_completion_key(self, quest):
+        """Return a stable deduplication key, including support for legacy payloads."""
+        if quest.get("id") not in (None, ""):
+            return f"id:{quest['id']}"
+        fields = (
+            quest.get("slot"),
+            quest.get("quest_name") or quest.get("description") or quest.get("poi_name"),
+            quest.get("completed_at"),
+            quest.get("xp"),
+        )
+        return "legacy:" + "|".join(str(value or "") for value in fields)
+
+    async def _drain_quest_completion_outbox(self):
+        """Send pending quest completions, retaining failures for a later retry."""
+        if not self._pending_quest_completions:
+            return
+        if not self.connected_channels:
+            logging.warning(
+                "Quest completion announcement deferred: Twitch channel is not connected"
+            )
+            return
+
+        channel = self.connected_channels[0]
+        for completion_key, event in list(self._pending_quest_completions.items()):
+            completed_quest = event.get("completed_quest") or {}
+            new_quest = event.get("new_quest")
+
+            if not event.get("completion_sent"):
+                try:
+                    await channel.send(self._format_quest_completion(completed_quest))
+                except Exception:
+                    logging.exception(
+                        "Quest completion announcement failed; queued for retry: %s",
+                        completion_key,
+                    )
                     continue
 
-                completion_line = self._format_quest_completion(completed_quest)
-                if completion_line and self.connected_channels:
-                    await self.connected_channels[0].send(completion_line)
-                    self._last_completed_quest_ids.add(completed_quest_id)
-                    logging.info(f"Quest completion announced: {completed_quest_id}")
-            
+                # Record this stage before sending the new quest so a failure on the
+                # second Twitch message never causes the completion to be duplicated.
+                event["completion_sent"] = True
+                self._save_quest_completion_state()
+
+            if not new_quest:
+                logging.warning(
+                    "New quest announcement deferred for %s: no replacement in slot %s",
+                    completion_key,
+                    completed_quest.get("slot"),
+                )
+                continue
+
+            try:
+                await channel.send(self._format_new_quest(new_quest))
+            except Exception:
+                logging.exception(
+                    "New quest announcement failed; queued for retry: %s",
+                    completion_key,
+                )
+                continue
+
+            self._announced_quest_completion_keys.add(completion_key)
+            del self._pending_quest_completions[completion_key]
+            self._save_quest_completion_state()
+            logging.info("Quest completion announced: %s", completion_key)
+
+    def _load_quest_completion_state(self):
+        """Restore undelivered quest announcements from disk."""
+        try:
+            if not os.path.exists(Config.QUEST_COMPLETION_STATE_FILE):
+                return
+            with open(Config.QUEST_COMPLETION_STATE_FILE, "r", encoding="utf-8") as state_file:
+                events = json.load(state_file)
+            for event in events:
+                completed_quest = event.get("completed_quest") or {}
+                event.setdefault("completion_sent", False)
+                self._pending_quest_completions[
+                    self._quest_completion_key(completed_quest)
+                ] = event
         except Exception as e:
-            logging.error(f"_check_and_announce_quest_completion error: {e}")
+            logging.error(f"Could not load quest completion state: {e}")
+
+    def _save_quest_completion_state(self):
+        """Atomically persist quest announcement state."""
+        state_path = Config.QUEST_COMPLETION_STATE_FILE
+        temp_path = f"{state_path}.tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8") as state_file:
+                json.dump(
+                    list(self._pending_quest_completions.values()), state_file, ensure_ascii=False
+                )
+            os.replace(temp_path, state_path)
+        except Exception as e:
+            logging.error(f"Could not save quest completion state: {e}")
 
     async def side_effects_loop(self):
         """Run operational side-effects on a steady cadence, decoupled from refresh."""
@@ -519,16 +627,19 @@ class DaggerfallBot(commands.Bot):
             await asyncio.sleep(30)
 
     async def refresh_now(self):
-        """One-shot refresh of cached data without chat output."""
-        try:
-            data = await self.get_map_json_data()
-            response = await asyncio.to_thread(post_to_django, data)
-            if response and response.status_code == 201:
-                self._latest_response_data = response.json()
-                self._latest_response_at = datetime.now(timezone.utc)
-                return True
-        except Exception as e:
-            logging.error(f"refresh_now error: {e}")
+        """Refresh cached data and reliably process completion events."""
+        async with self._refresh_lock:
+            try:
+                data = await self.get_map_json_data()
+                response = await asyncio.to_thread(post_to_django, data)
+                if response and response.status_code == 201:
+                    new_data = response.json()
+                    await self._check_and_announce_quest_completion(new_data)
+                    self._latest_response_data = new_data
+                    self._latest_response_at = datetime.now(timezone.utc)
+                    return True
+            except Exception:
+                logging.exception("refresh_now error")
         return False
 
     async def autosave_loop(self):
@@ -1478,6 +1589,23 @@ class DaggerfallBot(commands.Bot):
         if quest.get("xp") not in (None, "", 0):
             line += f"  {quest['xp']} XP awarded!"
         return line
+
+    def _format_new_quest(self, quest):
+        """Format the replacement quest paired with a completion announcement."""
+        poi = quest.get("poi") or {}
+        name = quest.get("quest_name") or quest.get("description") or "Quest"
+        line = f"🆕New Quest {quest.get('slot')}: {name}"
+        giver = quest.get("quest_giver_name")
+        if giver:
+            line += f" — {giver}"
+        line += f" — {quest.get('xp', 0)} XP"
+
+        url = "https://kershner.org/daggerwalk"
+        x = poi.get("map_pixel_x")
+        y = poi.get("map_pixel_y")
+        if x is not None and y is not None:
+            url += f"?map_focus_x={x}&map_focus_y={y}"
+        return f"{line} 🗺️Map: {url}"
 
     async def quest(self, args=None):
         """Report all active quests, or details for one stable slot."""
