@@ -11,6 +11,7 @@ bluesky_stub = types.ModuleType("bluesky_live")
 bluesky_stub.login = lambda *args: None
 bluesky_stub.clear_live = lambda *args: None
 bluesky_stub.ensure_live = lambda *args: None
+bluesky_stub.post_quest_completion = lambda *args: None
 sys.modules.setdefault("bluesky_live", bluesky_stub)
 
 import daggerwalk_twitch_bot as bot_module
@@ -64,6 +65,7 @@ def make_bot(channel=None):
     bot._announced_quest_completion_keys = set()
     bot._pending_quest_completions = {}
     bot._save_quest_completion_state = lambda: None
+    bot.bluesky_client = None
     bot._test_channels = [] if channel is None else [channel]
 
     async def get_map_json_data():
@@ -193,6 +195,47 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
                 "🗺️Map: https://kershner.org/daggerwalk",
             ],
         )
+        self.assertEqual(bot._pending_quest_completions, {})
+
+    async def test_bluesky_retry_does_not_repeat_twitch_messages(self):
+        channel = RecordingChannel()
+        bot = make_bot(channel)
+        bot.bluesky_client = object()
+        payload = {
+            "active_quests": [
+                {"id": 8, "slot": 2, "quest_name": "Travel to Sentinel", "xp": 35}
+            ],
+            "completed_quests": [{
+                "id": 7,
+                "slot": 2,
+                "quest_name": "Travel to Wayrest",
+                "quest_giver_name": "Lady Brisienna",
+                "quest_giver_img_url": "https://example.com/brisienna.png",
+                "xp": 30,
+            }],
+        }
+
+        with patch.object(
+            bot_module.bluesky_live,
+            "post_quest_completion",
+            side_effect=RuntimeError("temporary Bluesky failure"),
+        ):
+            await bot._check_and_announce_quest_completion(payload)
+
+        self.assertEqual(len(channel.messages), 2)
+        event = bot._pending_quest_completions["id:7"]
+        self.assertTrue(event["completion_sent"])
+        self.assertTrue(event["new_quest_sent"])
+        self.assertFalse(event["bluesky_sent"])
+
+        with patch.object(bot_module.bluesky_live, "post_quest_completion") as post:
+            await bot._check_and_announce_quest_completion({
+                "active_quests": payload["active_quests"],
+                "completed_quests": [],
+            })
+
+        post.assert_called_once()
+        self.assertEqual(len(channel.messages), 2)
         self.assertEqual(bot._pending_quest_completions, {})
 
 

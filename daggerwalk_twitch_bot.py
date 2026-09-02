@@ -93,11 +93,9 @@ class Config:
     WEATHER_EMOJIS = {"Sunny": "☀️", "Clear": "🌙", "Overcast": "🌥️", "Cloudy": "☁️", "Foggy": "🌫️",
                         "Rainy": "🌧️", "Snowy": "🌨️", "Thunderstorm": "⛈️"}
 
-    WEATHER_DISPLAY_NAMES = {"Thunderstorm": "Thunderstorming"}
-
-    @classmethod
-    def get_weather_display(cls, weather: str) -> str:
-        return cls.WEATHER_DISPLAY_NAMES.get(weather.title(), weather)
+    @staticmethod
+    def get_weather_display(weather: str) -> str:
+        return "Thunderstorming" if weather.lower() == "thunderstorm" else weather
     
     SEASON_EMOJIS = {"Winter": "☃️", "Spring": "🌸", "Summer": "🌻", "Autumn": "🍂"}
 
@@ -434,6 +432,8 @@ class DaggerfallBot(commands.Bot):
                         "completed_quest": completed_quest,
                         "new_quest": active_quests_by_slot.get(completed_quest.get("slot")),
                         "completion_sent": False,
+                        "bluesky_sent": False,
+                        "new_quest_sent": False,
                     },
                 )
 
@@ -495,6 +495,30 @@ class DaggerfallBot(commands.Bot):
                 event["completion_sent"] = True
                 self._save_quest_completion_state()
 
+            if not event.get("bluesky_sent"):
+                if self.bluesky_client:
+                    try:
+                        await asyncio.to_thread(
+                            bluesky_live.post_quest_completion,
+                            self.bluesky_client,
+                            completed_quest,
+                            completion_key,
+                        )
+                    except Exception:
+                        logging.exception(
+                            "Bluesky quest completion failed; queued for retry: %s",
+                            completion_key,
+                        )
+                    else:
+                        event["bluesky_sent"] = True
+                        self._save_quest_completion_state()
+                else:
+                    logging.warning(
+                        "Bluesky quest completion skipped: client is unavailable"
+                    )
+                    event["bluesky_sent"] = True
+                    self._save_quest_completion_state()
+
             if not new_quest:
                 logging.warning(
                     "New quest announcement deferred for %s: no replacement in slot %s",
@@ -503,13 +527,19 @@ class DaggerfallBot(commands.Bot):
                 )
                 continue
 
-            try:
-                await channel.send(self._format_new_quest(new_quest))
-            except Exception:
-                logging.exception(
-                    "New quest announcement failed; queued for retry: %s",
-                    completion_key,
-                )
+            if not event.get("new_quest_sent"):
+                try:
+                    await channel.send(self._format_new_quest(new_quest))
+                except Exception:
+                    logging.exception(
+                        "New quest announcement failed; queued for retry: %s",
+                        completion_key,
+                    )
+                    continue
+                event["new_quest_sent"] = True
+                self._save_quest_completion_state()
+
+            if not event.get("bluesky_sent"):
                 continue
 
             self._announced_quest_completion_keys.add(completion_key)
@@ -527,6 +557,8 @@ class DaggerfallBot(commands.Bot):
             for event in events:
                 completed_quest = event.get("completed_quest") or {}
                 event.setdefault("completion_sent", False)
+                event.setdefault("bluesky_sent", False)
+                event.setdefault("new_quest_sent", False)
                 self._pending_quest_completions[
                     self._quest_completion_key(completed_quest)
                 ] = event

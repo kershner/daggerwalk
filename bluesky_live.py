@@ -1,6 +1,9 @@
 # bluesky_live.py
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+from io import BytesIO
 from atproto import Client
+import requests
 
 STATUS_COLL = "app.bsky.actor.status"
 STATUS_RKEY = "self"
@@ -8,6 +11,7 @@ MAX_MINUTES = 240
 REFRESH_EARLY = timedelta(minutes=5)
 
 LIVE_URI = "https://www.twitch.tv/daggerwalk"
+JOURNEY_URI = "https://kershner.org/daggerwalk"
 
 
 def login(handle: str, app_password: str) -> Client | None:
@@ -85,3 +89,67 @@ def ensure_live(c: Client, title: str, desc: str) -> None:
 
     except Exception:
         set_live(c, title, desc)
+
+
+def build_quest_completion_post(quest: dict) -> tuple[str, str]:
+    """Build quest-completion post text and portrait alt text."""
+    quest_name = quest.get("quest_name") or quest.get("poi_name") or "Quest"
+    quest_giver = (quest.get("quest_giver_name") or "").strip()
+    xp = quest.get("xp")
+
+    lines = [f"✅ Quest complete: {quest_name}!"]
+    if quest_giver:
+        lines.extend(["", f"Quest given by {quest_giver}"])
+    if xp not in (None, ""):
+        lines.append(f"⚔️ {xp} XP awarded")
+    lines.extend(["", JOURNEY_URI])
+
+    alt = (
+        f"Portrait of {quest_giver}, who gave The Walker the completed "
+        f"quest “{quest_name}.”"
+        if quest_giver
+        else ""
+    )
+
+    return "\n".join(lines), alt
+
+
+def post_quest_completion(c: Client, quest: dict, completion_key: str) -> None:
+    """Publish or replace one idempotent quest-completion post."""
+    text, alt = build_quest_completion_post(quest)
+    url_start = text.index(JOURNEY_URI)
+    record = {
+        "$type": "app.bsky.feed.post",
+        "text": text,
+        "createdAt": _now_z(),
+        "facets": [{
+            "index": {
+                "byteStart": len(text[:url_start].encode("utf-8")),
+                "byteEnd": len(text[:url_start + len(JOURNEY_URI)].encode("utf-8")),
+            },
+            "features": [{
+                "$type": "app.bsky.richtext.facet#link",
+                "uri": JOURNEY_URI,
+            }],
+        }],
+    }
+
+    portrait_url = quest.get("quest_giver_img_url")
+    if portrait_url and alt:
+        response = requests.get(portrait_url, timeout=15)
+        response.raise_for_status()
+        blob = c.com.atproto.repo.upload_blob(BytesIO(response.content))
+        record["embed"] = {
+            "$type": "app.bsky.embed.images",
+            "images": [{"image": blob.blob, "alt": _clamp(alt, 1000)}],
+        }
+
+    # A deterministic record key makes retries safe even if the process exits before
+    # its local outbox state is saved.
+    digest = sha256(completion_key.encode("utf-8")).hexdigest()[:24]
+    c.com.atproto.repo.put_record(data={
+        "repo": c.me.did,
+        "collection": "app.bsky.feed.post",
+        "rkey": f"quest-completion-{digest}",
+        "record": record,
+    })
