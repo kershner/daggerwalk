@@ -1,8 +1,10 @@
 import asyncio
 import re
 import sys
+import time
 import types
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 
@@ -17,6 +19,7 @@ bluesky_stub.new_tid = lambda: "3jzfcijpj2z2a"
 sys.modules.setdefault("bluesky_live", bluesky_stub)
 
 import daggerwalk_twitch_bot as bot_module
+bot_module.bluesky_live = bluesky_stub
 
 
 class FakeResponse:
@@ -64,8 +67,11 @@ def make_bot(channel=None):
     bot._refresh_lock = asyncio.Lock()
     bot._latest_response_data = None
     bot._latest_response_at = None
+    bot._recent_world_positions = []
+    bot._latest_command_state = None
     bot._announced_quest_completion_keys = set()
     bot._pending_quest_completions = {}
+    bot._last_bluesky_quest_post_date = None
     bot._save_quest_completion_state = lambda: None
     bot.bluesky_client = None
     bot._test_channels = [] if channel is None else [channel]
@@ -78,6 +84,52 @@ def make_bot(channel=None):
 
 
 class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_quest_command_uses_fresh_cached_response(self):
+        channel = RecordingChannel()
+        bot = make_bot(channel)
+        bot._latest_response_data = {
+            "active_quests": [
+                {"id": 1, "slot": 1, "quest_name": "Travel to Wayrest", "xp": 20}
+            ],
+            "completed_quests": [],
+        }
+        bot._latest_response_at = datetime.now(timezone.utc)
+        bot.refresh_now = AsyncMock(return_value=True)
+
+        await bot.quest()
+
+        bot.refresh_now.assert_not_awaited()
+        self.assertEqual(len(channel.messages), 1)
+
+    async def test_stuck_check_uses_cached_positions_without_logs_api_call(self):
+        bot = make_bot()
+        bot._bot_started_at_monotonic = time.monotonic() - 301
+        bot._recent_world_positions = [(0, 0), (100, 100)]
+
+        with patch.object(bot_module.requests, "get") as get:
+            await bot.check_if_bot_is_stuck()
+
+        get.assert_not_called()
+
+    async def test_stuck_check_uses_piggybacked_command_state(self):
+        bot = make_bot()
+        bot._bot_started_at_monotonic = time.monotonic() - 301
+        bot._recent_world_positions = [(100, 100), (100, 100)]
+        bot._latest_command_state = {
+            "last_stop": {
+                "id": 2,
+                "command": "stop",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            "last_walk": {"id": 1, "command": "walk"},
+            "last_command": {"id": 2, "command": "stop"},
+        }
+
+        with patch.object(bot_module.requests, "get") as get:
+            await bot.check_if_bot_is_stuck()
+
+        get.assert_not_called()
+
     async def test_background_refresh_sends_info_only_after_success(self):
         bot = make_bot()
         bot._state_ready = asyncio.Event()
@@ -309,6 +361,27 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
         post.assert_called_once()
         self.assertEqual(post.call_args.args[2], first_rkey)
         self.assertEqual(len(channel.messages), 2)
+        self.assertEqual(bot._pending_quest_completions, {})
+
+    async def test_only_one_bluesky_quest_completion_is_posted_per_eastern_day(self):
+        channel = RecordingChannel()
+        bot = make_bot(channel)
+        bot.bluesky_client = object()
+        payload = {
+            "active_quests": [
+                {"id": 12, "slot": 1, "quest_name": "Next quest", "xp": 10},
+                {"id": 13, "slot": 2, "quest_name": "Another quest", "xp": 15},
+            ],
+            "completed_quests": [
+                {"id": 10, "slot": 1, "quest_name": "First quest"},
+                {"id": 11, "slot": 2, "quest_name": "Second quest"},
+            ],
+        }
+
+        with patch.object(bot_module.bluesky_live, "post_quest_completion") as post:
+            await bot._check_and_announce_quest_completion(payload)
+
+        post.assert_called_once()
         self.assertEqual(bot._pending_quest_completions, {})
 
 

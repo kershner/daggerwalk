@@ -67,7 +67,17 @@ class LiveTextTests(unittest.TestCase):
 
         self.assertEqual(
             title,
-            "Walking through Wayrest on a rainy mid Summer night (6:30 pm)",
+            "Walking through Wayrest on a rainy mid Summer evening (6:30 pm)",
+        )
+
+    def test_ocean_title_uses_nearest_region(self):
+        title = self.bot.build_live_text(
+            "Ocean", "Rainy", "18:30:00", "", "Wayrest"
+        )
+
+        self.assertEqual(
+            title,
+            "Walking through the ocean near Wayrest on a rainy evening (6:30 pm)",
         )
 
     def test_thunderstorm_uses_present_participle_in_title(self):

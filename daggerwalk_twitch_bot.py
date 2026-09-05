@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timedelta, timezone
 from twitchio.ext import commands
 import pygetwindow as gw
 from enum import Enum
@@ -409,6 +409,8 @@ class DaggerfallBot(commands.Bot):
         self._bot_started_at_monotonic = time.monotonic()
         self._latest_response_data = None
         self._latest_response_at = None
+        self._recent_world_positions = []
+        self._latest_command_state = None
         self.last_autosave = datetime.now(timezone.utc)
         self.voting_active = False
         self.current_vote_type = None
@@ -422,6 +424,7 @@ class DaggerfallBot(commands.Bot):
         self._movement = MovementController()
         self._announced_quest_completion_keys = set()
         self._pending_quest_completions = {}
+        self._last_bluesky_quest_post_date = None
         self._load_quest_completion_state()
 
         self.state = {
@@ -721,26 +724,38 @@ class DaggerfallBot(commands.Bot):
 
             if not event.get("bluesky_sent"):
                 if self.bluesky_client:
-                    # Feed-post record keys must be TIDs. Persist one before the
-                    # request so every retry targets the same record.
-                    if not event.get("bluesky_rkey"):
-                        event["bluesky_rkey"] = bluesky_live.new_tid()
-                        self._save_quest_completion_state()
-                    try:
-                        await asyncio.to_thread(
-                            bluesky_live.post_quest_completion,
-                            self.bluesky_client,
-                            completed_quest,
-                            event["bluesky_rkey"],
-                        )
-                    except Exception:
-                        logging.exception(
-                            "Bluesky quest completion failed; queued for retry: %s",
+                    today_eastern = datetime.now(
+                        pytz.timezone("US/Eastern")
+                    ).date().isoformat()
+                    if self._last_bluesky_quest_post_date == today_eastern:
+                        logging.info(
+                            "Bluesky quest completion skipped for %s: daily post already sent",
                             completion_key,
                         )
-                    else:
                         event["bluesky_sent"] = True
                         self._save_quest_completion_state()
+                    else:
+                        # Feed-post record keys must be TIDs. Persist one before the
+                        # request so every retry targets the same record.
+                        if not event.get("bluesky_rkey"):
+                            event["bluesky_rkey"] = bluesky_live.new_tid()
+                            self._save_quest_completion_state()
+                        try:
+                            await asyncio.to_thread(
+                                bluesky_live.post_quest_completion,
+                                self.bluesky_client,
+                                completed_quest,
+                                event["bluesky_rkey"],
+                            )
+                        except Exception:
+                            logging.exception(
+                                "Bluesky quest completion failed; queued for retry: %s",
+                                completion_key,
+                            )
+                        else:
+                            event["bluesky_sent"] = True
+                            self._last_bluesky_quest_post_date = today_eastern
+                            self._save_quest_completion_state()
                 else:
                     logging.warning(
                         "Bluesky quest completion skipped: client is unavailable"
@@ -782,7 +797,15 @@ class DaggerfallBot(commands.Bot):
             if not os.path.exists(Config.QUEST_COMPLETION_STATE_FILE):
                 return
             with open(Config.QUEST_COMPLETION_STATE_FILE, "r", encoding="utf-8") as state_file:
-                events = json.load(state_file)
+                saved_state = json.load(state_file)
+            if isinstance(saved_state, dict):
+                events = saved_state.get("events", [])
+                self._last_bluesky_quest_post_date = saved_state.get(
+                    "last_bluesky_quest_post_date"
+                )
+            else:
+                # Backward compatibility with the original list-only file.
+                events = saved_state
             for event in events:
                 completed_quest = event.get("completed_quest") or {}
                 event.setdefault("completion_sent", False)
@@ -800,9 +823,10 @@ class DaggerfallBot(commands.Bot):
         temp_path = f"{state_path}.tmp"
         try:
             with open(temp_path, "w", encoding="utf-8") as state_file:
-                json.dump(
-                    list(self._pending_quest_completions.values()), state_file, ensure_ascii=False
-                )
+                json.dump({
+                    "events": list(self._pending_quest_completions.values()),
+                    "last_bluesky_quest_post_date": self._last_bluesky_quest_post_date,
+                }, state_file, ensure_ascii=False)
             os.replace(temp_path, state_path)
         except Exception as e:
             logging.error(f"Could not save quest completion state: {e}")
@@ -907,6 +931,12 @@ class DaggerfallBot(commands.Bot):
                     await self._check_and_announce_quest_completion(new_data)
                     self._latest_response_data = new_data
                     self._latest_response_at = datetime.now(timezone.utc)
+                    self._latest_command_state = new_data.get("command_state")
+                    log = new_data.get("log") or {}
+                    position = (log.get("world_x"), log.get("world_z"))
+                    if None not in position:
+                        self._recent_world_positions.append(position)
+                        self._recent_world_positions = self._recent_world_positions[-2:]
                     return True
             except Exception:
                 logging.exception("refresh_now error")
@@ -1553,6 +1583,7 @@ class DaggerfallBot(commands.Bot):
         weather: str,
         time_str: str,
         date_str: str = "",
+        last_known_region: str = "",
     ) -> str:
         game_time = datetime.strptime(time_str, "%H:%M:%S")
         hour = game_time.hour
@@ -1560,6 +1591,8 @@ class DaggerfallBot(commands.Bot):
             time_of_day = "morning"
         elif 12 <= hour < 18:
             time_of_day = "afternoon"
+        elif 18 <= hour < 21:
+            time_of_day = "evening"
         else:
             time_of_day = "night"
         qualified_season = self.get_qualified_season(date_str)
@@ -1567,7 +1600,12 @@ class DaggerfallBot(commands.Bot):
         conditions = " ".join(filter(None, [weather_display, qualified_season, time_of_day]))
         clock_time = game_time.strftime("%I:%M %p").lstrip("0").lower()
         clock_time = clock_time.replace(":00 ", " ")
-        return f"Walking through {region} on a {conditions} ({clock_time})"
+        place = region
+        if region.strip().lower() == "ocean":
+            place = "the ocean"
+            if last_known_region:
+                place += f" near {last_known_region}"
+        return f"Walking through {place} on a {conditions} ({clock_time})"
 
     async def update_stream_title(
         self,
@@ -1575,9 +1613,12 @@ class DaggerfallBot(commands.Bot):
         weather: str,
         time_str: str,
         date_str: str = "",
+        last_known_region: str = "",
     ):
         try:
-            title = self.build_live_text(region, weather, time_str, date_str)
+            title = self.build_live_text(
+                region, weather, time_str, date_str, last_known_region
+            )
 
             client_id, oauth_token = Config.get_oauth()
 
@@ -1722,11 +1763,11 @@ class DaggerfallBot(commands.Bot):
             # Update stream title when we have HH:MM:SS
             if time_hms:
                 live_text = self.build_live_text(
-                    region or "", weather or "", time_hms, date_str
+                    region or "", weather or "", time_hms, date_str, last_known_name
                 )
                 self._update_state("bluesky_live_text", live_text)
                 await self.update_stream_title(
-                    region or "", weather or "", time_hms, date_str
+                    region or "", weather or "", time_hms, date_str, last_known_name
                 )
 
         except Exception as e:
@@ -1753,18 +1794,12 @@ class DaggerfallBot(commands.Bot):
             return
         
         try:
-            base = Config.DJANGO_BASE_API_URL
-            logging.info(f"Fetching logs from {base}/logs/...")
-
-            logs = requests.get(f"{base}/logs/?limit=2&ordering=-id", timeout=5).json().get("results", [])
-            logging.info(f"Retrieved {len(logs)} logs")
-            
-            if len(logs) < 2:
-                logging.info("Not enough logs for stuck check")
+            positions = getattr(self, "_recent_world_positions", [])
+            if len(positions) < 2:
+                logging.info("Not enough locally cached positions for stuck check")
                 return
 
-            pos1 = (logs[0].get("world_x"), logs[0].get("world_z"))
-            pos2 = (logs[1].get("world_x"), logs[1].get("world_z"))
+            pos1, pos2 = positions[-1], positions[-2]
             logging.info(f"Position comparison: pos1={pos1}, pos2={pos2}")
             
             # Calculate distance between positions (allow for small movements)
@@ -1782,28 +1817,36 @@ class DaggerfallBot(commands.Bot):
 
             logging.info("Positions are identical - checking stop/walk commands...")
 
-            # get last stop and walk
-            stop_cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id&command=stop", timeout=5).json().get("results", [])
-            walk_cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id&command=walk", timeout=5).json().get("results", [])
-            stop_id = stop_cmds[0]["id"] if stop_cmds else 0
-            walk_id = walk_cmds[0]["id"] if walk_cmds else 0
+            command_state = getattr(self, "_latest_command_state", None)
+            if not isinstance(command_state, dict):
+                logging.warning("Command state unavailable; deferring stuck recovery")
+                return
+
+            last_stop = command_state.get("last_stop") or {}
+            last_walk = command_state.get("last_walk") or {}
+            stop_id = last_stop.get("id", 0)
+            walk_id = last_walk.get("id", 0)
             logging.info(f"Last stop ID: {stop_id}, last walk ID: {walk_id}")
 
             # only consider stop newer than walk if the stop is from today
-            if stop_cmds:
-                stop_created = stop_cmds[0].get("created") or stop_cmds[0].get("timestamp")
+            if last_stop:
+                stop_created = last_stop.get("timestamp")
                 logging.info(f"Last stop timestamp: {stop_created}")
                 if stop_created:
                     # handle ISO8601 with optional 'Z'
                     stop_time = datetime.fromisoformat(stop_created.replace("Z", "+00:00"))
-                    logging.info(f"Stop time: {stop_time}, today: {date.today()}")
-                    if stop_time.date() == date.today() and stop_id > walk_id:
+                    if stop_time.tzinfo is None:
+                        stop_time = est.localize(stop_time)
+                    stop_date = stop_time.astimezone(est).date()
+                    today = datetime.now(est).date()
+                    logging.info(f"Stop time: {stop_time}, today: {today}")
+                    if stop_date == today and stop_id > walk_id:
                         logging.info("Recent stop command found - not attempting unstuck")
                         return
 
-            # still grab most recent command overall (to handle bighop case)
-            cmds = requests.get(f"{base}/chat_commands/?limit=1&ordering=-id", timeout=5).json().get("results", [])
-            last_cmd = cmds[0]["command"].lower() if cmds else None
+            # Use the piggybacked latest command to alternate recovery after bighop.
+            last_command = command_state.get("last_command") or {}
+            last_cmd = (last_command.get("command") or "").lower() or None
             logging.info(f"Last command: {last_cmd}")
 
             if not self.connected_channels:
@@ -1968,11 +2011,14 @@ class DaggerfallBot(commands.Bot):
 
     async def quest(self, args=None):
         """Report all active quests, or details for one stable slot."""
-        await self.refresh_now()
-        
         try:
-            # If we’ve never cached a response (e.g., right after startup), try one-shot refresh
-            if not self._latest_response_data:
+            cache_age = (
+                (datetime.now(timezone.utc) - self._latest_response_at).total_seconds()
+                if self._latest_response_at else None
+            )
+            if not self._latest_response_data or (
+                cache_age is not None and cache_age > Config.REFRESH_INTERVAL * 2
+            ):
                 ok = await self.refresh_now()
                 if not ok:
                     if self.connected_channels:

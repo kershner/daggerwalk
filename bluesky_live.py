@@ -43,6 +43,23 @@ def _clamp(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
+def _format_duration(total_minutes) -> str:
+    try:
+        total_minutes = max(0, int(total_minutes))
+    except (TypeError, ValueError):
+        return ""
+    days, remainder = divmod(total_minutes, 24 * 60)
+    hours, minutes = divmod(remainder, 60)
+    parts = []
+    if days:
+        parts.append(f"{days} day{'s' if days != 1 else ''}")
+    if hours:
+        parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+    if minutes or not parts:
+        parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+    return " ".join(parts)
+
+
 def _record(title: str, desc: str) -> dict:
     # Keep it no-thumb. Title/desc are what you wanted dynamic.
     return {
@@ -109,6 +126,8 @@ def build_quest_completion_post(quest: dict) -> tuple[str, str]:
     quest_giver = (quest.get("quest_giver_name") or "").strip()
     xp = quest.get("xp")
     participant_count = quest.get("participant_count")
+    duration = _format_duration(quest.get("duration_minutes"))
+    distance_km = quest.get("distance_km")
 
     lines = [f"✅ Quest complete: {quest_name}!"]
     if quest_giver:
@@ -119,6 +138,14 @@ def build_quest_completion_post(quest: dict) -> tuple[str, str]:
             walker_label = "walker" if participant_count == 1 else "walkers"
             reward += f" to {participant_count} {walker_label}"
         lines.append(reward)
+    if duration:
+        lines.append(f"🕒 Quest length: {duration}")
+    if distance_km not in (None, ""):
+        try:
+            distance = f"{float(distance_km):.2f}".rstrip("0").rstrip(".")
+            lines.append(f"🥾 Distance traveled: {distance} km")
+        except (TypeError, ValueError):
+            pass
     lines.extend(["", quest_completion_uri(quest)])
 
     alt = (

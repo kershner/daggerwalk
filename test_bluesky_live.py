@@ -25,13 +25,17 @@ class QuestCompletionPostTests(unittest.TestCase):
             "quest_giver_name": "Lady Brisienna",
             "xp": 30,
             "participant_count": 3,
+            "duration_minutes": 1500,
+            "distance_km": 42.5,
         })
 
         self.assertEqual(
             text,
             "✅ Quest complete: Travel to Wayrest!\n\n"
             "Quest given by Lady Brisienna\n"
-            "⚔️ 30 XP awarded to 3 walkers\n\n"
+            "⚔️ 30 XP awarded to 3 walkers\n"
+            "🕒 Quest length: 1 day 1 hour\n"
+            "🥾 Distance traveled: 42.5 km\n\n"
             "https://kershner.org/daggerwalk/quests/42/",
         )
         self.assertEqual(
