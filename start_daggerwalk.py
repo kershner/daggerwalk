@@ -4,6 +4,7 @@ import psutil
 import logging
 import os
 import argparse
+import shutil
 import pyautogui
 import pygetwindow as gw
 from pathlib import Path
@@ -36,6 +37,25 @@ SOUNDVOLUMEVIEW_PATH = first_existing_path(
 
 # === Readiness flag ===
 READY_FLAG = Path(r"C:\Daggerwalk\runtime\dfu_ready.flag")
+SOFTWARE_CURSOR = Path(__file__).parent / "dfu_assets" / "Textures" / "Cursor.png"
+
+
+def install_software_cursor():
+    """Force DFU to render its cursor in-frame so OBS can capture it."""
+    if not SOFTWARE_CURSOR.is_file():
+        logging.warning(f"Software cursor asset not found: {SOFTWARE_CURSOR}")
+        return False
+
+    game_dir = Path(DAGGERFALL_EXE).parent
+    target = game_dir / "DaggerfallUnity_Data" / "StreamingAssets" / "Textures" / "Cursor.png"
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SOFTWARE_CURSOR, target)
+        logging.info(f"Installed software cursor asset: {target}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to install software cursor asset: {e}")
+        return False
 
 # Function to check if a process is running
 def is_process_running(process_name):
@@ -75,6 +95,8 @@ def start_daggerfall():
 
     logging.info("Starting Daggerfall Unity...")
     try:
+        install_software_cursor()
+
         # Start DFU
         subprocess.Popen(
             DAGGERFALL_EXE,
