@@ -14,6 +14,9 @@ import pytz
 import json
 import time
 import os
+import ctypes
+import math
+from contextlib import asynccontextmanager
 
 
 logging.basicConfig(
@@ -53,6 +56,12 @@ class Config:
     VOTING_DURATION = 20  # seconds
     AUTHORIZED_USERS = ["billcrystals", "daggerwalk", "daggerwalk_bot"]
     MAX_INPUT_REPEATS = 100
+    DEFAULT_MOVEMENT_AMOUNT = 10
+    TRANSLATION_SECONDS_PER_STEP = 0.1
+    CONTROL_TICK_SECONDS = 0.02
+    MOUSE_STEP_PIXELS = 20
+    MAX_PENDING_MOUSE_PIXELS = 5000
+    MAX_PENDING_TRANSLATION_SECONDS = 10.0
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
     DJANGO_LOG_URL = "https://kershner.org/daggerwalk/log/"
     QUEST_COMPLETION_STATE_FILE = "quest_completion_state.json"
@@ -138,28 +147,128 @@ class Config:
         password = params.get("BLUESKY_APP_PASSWORD", "")
         return handle, password
 
+def get_game_dialog():
+    """Return a fresh automation handle for the game window."""
+    window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity")
+                   if w.title == "Daggerfall Unity"), None)
+    if not window:
+        logging.warning("Game window not found")
+        return None
+    app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
+    return app.window(handle=window._hWnd)
+
+
 def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
-    """Send keyboard input to Daggerfall Unity window"""
+    """Send keyboard input to Daggerfall Unity window."""
     try:
-        # Create a fresh Application instance each time
-        window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
-                      if w.title == "Daggerfall Unity"), None)
-                      
-        if not window:
-            logging.warning("Game window not found")
+        dialog = get_game_dialog()
+        if dialog is None:
             return
-            
-        # Force a completely new connection every time, with no caching
-        app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
-        dlg = app.window(handle=window._hWnd)
-        
         logging.info(f"Sending input: {key} ({repeat} times)")
         for _ in range(repeat):
-            dlg.send_keystrokes(key)
+            dialog.send_keystrokes(key)
             time.sleep(delay)
-            
     except Exception as e:
         logging.error(f"Input error: {e}")
+
+
+def focus_game_window() -> bool:
+    """Focus Daggerfall Unity before sending global mouse or held-key input."""
+    try:
+        dialog = get_game_dialog()
+        if dialog is None:
+            return False
+        dialog.set_focus()
+        return True
+    except Exception as e:
+        logging.error(f"Could not focus game window: {e}")
+        return False
+
+
+def move_mouse_relative(dx: int, dy: int):
+    """Send one relative mouse movement event."""
+    ctypes.windll.user32.mouse_event(0x0001, int(dx), int(dy), 0, 0)
+
+
+def set_movement_key(key: str, pressed: bool):
+    """Set W/S state without sleeps or PyAutoGUI's implicit pause."""
+    virtual_keys = {"w": 0x57, "s": 0x53}
+    flags = 0 if pressed else 0x0002
+    ctypes.windll.user32.keybd_event(virtual_keys[key], 0, flags, 0)
+
+
+class MovementController:
+    """Blend chat movement into one smooth, cancellable input stream."""
+
+    def __init__(self, mouse_move=move_mouse_relative, key_state=set_movement_key):
+        self._mouse_move = mouse_move
+        self._key_state = key_state
+        self._yaw_pixels = 0.0
+        self._pitch_pixels = 0.0
+        self._translation_seconds = 0.0
+        self._held_key = None
+        self._generation = 0
+
+    @property
+    def generation(self):
+        return self._generation
+
+    @property
+    def translation_active(self):
+        return bool(self._translation_seconds or self._held_key)
+
+    @staticmethod
+    def _clamp(value, limit):
+        return max(-limit, min(limit, value))
+
+    def add_view(self, yaw_steps=0, pitch_steps=0):
+        step = Config.MOUSE_STEP_PIXELS
+        limit = Config.MAX_PENDING_MOUSE_PIXELS
+        self._yaw_pixels = self._clamp(self._yaw_pixels + yaw_steps * step, limit)
+        self._pitch_pixels = self._clamp(self._pitch_pixels + pitch_steps * step, limit)
+
+    def add_translation(self, steps):
+        seconds = steps * Config.TRANSLATION_SECONDS_PER_STEP
+        self._translation_seconds = self._clamp(
+            self._translation_seconds + seconds,
+            Config.MAX_PENDING_TRANSLATION_SECONDS,
+        )
+        return self._generation
+
+    def cancel_all(self):
+        self._generation += 1
+        self._yaw_pixels = self._pitch_pixels = self._translation_seconds = 0.0
+        self.pause()
+
+    def pause(self):
+        """Release a held key while retaining pending chat movement."""
+        if self._held_key:
+            self._key_state(self._held_key, False)
+            self._held_key = None
+
+    def tick(self):
+        """Advance all active axes by one fixed control interval."""
+        step = Config.MOUSE_STEP_PIXELS
+        dx = self._clamp(self._yaw_pixels, step)
+        dy = self._clamp(self._pitch_pixels, step)
+        self._yaw_pixels -= dx
+        self._pitch_pixels -= dy
+
+        desired_key = None
+        if self._translation_seconds:
+            desired_key = "w" if self._translation_seconds > 0 else "s"
+            elapsed = min(abs(self._translation_seconds), Config.CONTROL_TICK_SECONDS)
+            self._translation_seconds -= math.copysign(elapsed, self._translation_seconds)
+
+        if desired_key != self._held_key:
+            self.pause()
+            if desired_key:
+                self._key_state(desired_key, True)
+            self._held_key = desired_key
+
+        if dx or dy:
+            self._mouse_move(round(dx), round(dy))
+
 
 def post_to_django(data, reset=False):
     """Post game state data to Django endpoint in background"""
@@ -247,6 +356,9 @@ class DaggerfallBot(commands.Bot):
         self._state_ready = asyncio.Event()
         self._startup_tasks_started = False
         self._refresh_lock = asyncio.Lock()
+        self._ui_lock = asyncio.Lock()
+        self._active_command_tasks = set()
+        self._movement = MovementController()
         self._announced_quest_completion_keys = set()
         self._pending_quest_completions = {}
         self._load_quest_completion_state()
@@ -331,6 +443,42 @@ class DaggerfallBot(commands.Bot):
         self.crash_monitor_task = asyncio.create_task(self.crash_monitor())
         self.side_effects_task = asyncio.create_task(self.side_effects_loop())
         self.local_state_refresh_task = asyncio.create_task(self.local_state_refresh_loop())  
+        self.movement_control_task = asyncio.create_task(self.movement_control_loop())
+
+    async def movement_control_loop(self):
+        """Continuously apply blended mouse turns and W/S holds."""
+        logging.info("Starting movement control loop")
+        try:
+            while True:
+                try:
+                    if self._ui_lock.locked():
+                        self._movement.pause()
+                    else:
+                        self._movement.tick()
+                except Exception as e:
+                    logging.error(f"Movement control error: {e}")
+                    self._movement.cancel_all()
+                await asyncio.sleep(Config.CONTROL_TICK_SECONDS)
+        finally:
+            self._movement.cancel_all()
+
+    def _start_command_task(self, name, command_factory):
+        """Launch an ordinary command without blocking Twitch message handling."""
+        async def run_command():
+            try:
+                await command_factory()
+            except Exception:
+                logging.exception(f"Command !{name} failed")
+
+        task = asyncio.create_task(run_command())
+        self._active_command_tasks.add(task)
+        task.add_done_callback(self._active_command_tasks.discard)
+
+    @asynccontextmanager
+    async def _game_ui(self):
+        async with self._ui_lock:
+            self._movement.pause()
+            yield
 
     async def message_scheduler(self):
         """Schedule periodic help (20m) and quest (25m) messages."""
@@ -776,6 +924,9 @@ class DaggerfallBot(commands.Bot):
 
         # Handle voting commands
         if command in self.votable_commands:
+            if self.voting_active:
+                await message.channel.send("A vote is already in progress!")
+                return
             if command == "song" and not self.validate_song_arg(args)[0]:
                 await message.channel.send(self.validate_song_arg(args)[1])
                 return
@@ -788,15 +939,15 @@ class DaggerfallBot(commands.Bot):
 
         # Map commands to methods
         command_map = {
-            "walk": lambda: self.send_movement(GameKeys.WALK),
-            "back": lambda: self.handle_movement_arg_required(message, GameKeys.BACK, args),
-            "forward": lambda: self.handle_movement_arg_required(message, GameKeys.FORWARD, args),
-            "left": lambda: self.handle_movement_arg_required(message, GameKeys.LEFT, args),
-            "right": lambda: self.handle_movement_arg_required(message, GameKeys.RIGHT, args),
-            "up": lambda: self.handle_movement_arg_required(message, GameKeys.UP, args),
-            "down": lambda: self.handle_movement_arg_required(message, GameKeys.DOWN, args),
+            "walk": lambda: self.start_walking(message.channel),
+            "back": lambda: self.send_movement(GameKeys.BACK, args),
+            "forward": lambda: self.send_movement(GameKeys.FORWARD, args),
+            "left": lambda: self.send_movement(GameKeys.LEFT, args),
+            "right": lambda: self.send_movement(GameKeys.RIGHT, args),
+            "up": lambda: self.send_movement(GameKeys.UP, args),
+            "down": lambda: self.send_movement(GameKeys.DOWN, args),
             "jump": lambda: self.send_movement(GameKeys.JUMP, repeat=10),
-            "stop": lambda: self.handle_movement_arg_required(message, GameKeys.BACK, ["1"]),
+            "stop": lambda: self.stop_movement(message.channel),
             "use": lambda: self.send_movement(GameKeys.USE),
             "map": self.toggle_map,
             "bighop": self.bighop,
@@ -815,26 +966,60 @@ class DaggerfallBot(commands.Bot):
         }
 
         if command in command_map:
-            await command_map[command]()
+            self._start_command_task(command, command_map[command])
 
     async def admin_command(self, message, cmd):
         """Execute admin-only commands"""
         if message.author.name.lower() in Config.AUTHORIZED_USERS:
             await cmd()
 
-    async def handle_movement_arg_required(self, message, key: GameKeys, args):
-        """Require an integer arg for certain movement commands; otherwise prompt."""
+    @staticmethod
+    def _movement_amount(args):
         if not args:
-            await message.channel.send('Enter the movement command followed by n (1-100), ex - !left 20')
-            return
-        await self.send_movement(key, args)
+            return Config.DEFAULT_MOVEMENT_AMOUNT
+        try:
+            value = float(args[0])
+        except (TypeError, ValueError):
+            return Config.DEFAULT_MOVEMENT_AMOUNT
+        if not math.isfinite(value):
+            return Config.DEFAULT_MOVEMENT_AMOUNT
+        return max(1.0, min(float(Config.MAX_INPUT_REPEATS), value))
 
     async def send_movement(self, key: GameKeys, args=None, repeat=1):
         """Handle movement and action commands"""
-        if args and args[0].isdigit():
-            repeat = min(max(int(args[0]), 1), Config.MAX_INPUT_REPEATS)
-        logging.info(f"Sending movement: {key.name} ({repeat} times)")
-        send_game_input(key.value, repeat=repeat, delay=0.15)
+        amount = self._movement_amount(args)
+        logging.info(f"Sending movement: {key.name} ({amount:g})")
+        view_directions = {
+            GameKeys.LEFT: (-amount, 0),
+            GameKeys.RIGHT: (amount, 0),
+            GameKeys.UP: (0, -amount),
+            GameKeys.DOWN: (0, amount),
+        }
+        if key in view_directions:
+            if await asyncio.to_thread(focus_game_window):
+                yaw, pitch = view_directions[key]
+                self._movement.add_view(yaw, pitch)
+            return
+
+        if key in (GameKeys.FORWARD, GameKeys.BACK):
+            if await asyncio.to_thread(focus_game_window):
+                self._movement.add_translation(
+                    amount if key == GameKeys.FORWARD else -amount
+                )
+            return
+
+        await asyncio.to_thread(send_game_input, key.value, repeat, 0.15)
+
+    async def start_walking(self, channel):
+        await self.send_movement(GameKeys.WALK)
+        await channel.send("Autowalk started.")
+
+    async def stop_movement(self, channel):
+        """Cancel pending/held movement immediately and stop the autowalk mod."""
+        self._movement.cancel_all()
+        async with self._game_ui():
+            await asyncio.to_thread(send_game_input, GameKeys.BACK.value, 1, 0.1)
+        await channel.send("All movement stopped.")
 
     def validate_song_arg(self, args):
         """Validate song selection"""
@@ -1022,27 +1207,27 @@ class DaggerfallBot(commands.Bot):
         logging.info(f"Current region before map toggle: {current_region}")
         
         # Different behavior based on region
-        if current_region == "Ocean":
-            # No province to select for Ocean, so just open the map, wait a bit, and exit the map
-            logging.info("Ocean region detected - using alternate map sequence")
-            send_game_input(GameKeys.MAP.value)  # Open map
-            time.sleep(7)
-            send_game_input(GameKeys.MAP.value)  # Press V to exit
-        else:
-            # Original behavior for non-ocean regions
-            send_game_input(GameKeys.MAP.value)  # Open map
-            time.sleep(3)
-            send_game_input("{ENTER}")  # Press ENTER
-            time.sleep(6)  # Wait 6 seconds
-            send_game_input(GameKeys.MAP.value)  # Press V
-            time.sleep(2)
-            send_game_input(GameKeys.MAP.value)  # Press V again
+        async with self._game_ui():
+            if current_region == "Ocean":
+                # No province to select for Ocean, so just open the map, wait a bit, and exit the map
+                logging.info("Ocean region detected - using alternate map sequence")
+                await asyncio.to_thread(send_game_input, GameKeys.MAP.value)
+                await asyncio.sleep(7)
+                await asyncio.to_thread(send_game_input, GameKeys.MAP.value)
+            else:
+                await asyncio.to_thread(send_game_input, GameKeys.MAP.value)
+                await asyncio.sleep(3)
+                await asyncio.to_thread(send_game_input, "{ENTER}")
+                await asyncio.sleep(6)
+                await asyncio.to_thread(send_game_input, GameKeys.MAP.value)
+                await asyncio.sleep(2)
+                await asyncio.to_thread(send_game_input, GameKeys.MAP.value)
 
     async def toggle_camera(self):
         """Toggle Third Person Camera mod in game"""
         logging.info("Executing camera command")
-        time.sleep(1)
-        send_game_input(GameKeys.CAMERA.value)
+        await asyncio.sleep(1)
+        await asyncio.to_thread(send_game_input, GameKeys.CAMERA.value)
         current = self.state.get("camera_mode", "first")
         new_mode = "third" if current == "first" else "first"
         self._update_state("camera_mode", new_mode)
@@ -1050,8 +1235,14 @@ class DaggerfallBot(commands.Bot):
     async def bighop(self):
         """Shortcut for common pattern to get unstuck"""
         logging.info("Executing BIGHOP command")
-        send_game_input(GameKeys.BACK.value, repeat=100)
-        send_game_input(GameKeys.WALK.value)
+        if not await asyncio.to_thread(focus_game_window):
+            return
+        generation = self._movement.add_translation(-Config.MAX_INPUT_REPEATS)
+        while self._movement.translation_active:
+            if generation != self._movement.generation:
+                return
+            await asyncio.sleep(Config.CONTROL_TICK_SECONDS)
+        await asyncio.to_thread(send_game_input, GameKeys.WALK.value)
         await self.send_movement(GameKeys.JUMP, repeat=10)
 
     async def use_shotgun(self):
@@ -1060,22 +1251,22 @@ class DaggerfallBot(commands.Bot):
         
         # Raise weapon
         logging.info("Raising weapon")
-        send_game_input('Z')
-        time.sleep(0.5)
+        await asyncio.to_thread(send_game_input, 'Z')
+        await asyncio.sleep(0.5)
         
         # Fire weapon
         logging.info("Firing weapon")
-        send_game_input('X')
+        await asyncio.to_thread(send_game_input, 'X')
         
         # Wait before lowering weapon
-        time.sleep(2)
-        send_game_input('Z')
+        await asyncio.sleep(2)
+        await asyncio.to_thread(send_game_input, 'Z')
 
     async def song(self, choice=None):
         """Change background music"""
         logging.info(f"Executing song command with choice: {choice}")
         
-        self.send_console_command(f"song {choice}")
+        await self.send_console_command(f"song {choice}")
         
         await asyncio.sleep(5)
         
@@ -1091,7 +1282,7 @@ class DaggerfallBot(commands.Bot):
         logging.info(f"Executing song shuffle command with categories: {categories_str}")
         
         # Send the command to the game console
-        self.send_console_command(f"song shuffle {categories_str}")
+        await self.send_console_command(f"song shuffle {categories_str}")
         
         await asyncio.sleep(5)
         
@@ -1104,7 +1295,7 @@ class DaggerfallBot(commands.Bot):
         """Change in-game weather"""
         logging.info(f"Executing weather command with choice: {weather_choice}")
 
-        self.send_console_command(f"set_weather {Config.WEATHER_TYPES_MAP.get(weather_choice)}")
+        await self.send_console_command(f"set_weather {Config.WEATHER_TYPES_MAP.get(weather_choice)}")
 
         await asyncio.sleep(5)
         
@@ -1117,7 +1308,7 @@ class DaggerfallBot(commands.Bot):
         """Toggle levitatation on/off"""
         logging.info(f"Executing levitate command with choice: {levitate_choice}")
 
-        self.send_console_command(f"levitate {levitate_choice}")
+        await self.send_console_command(f"levitate {levitate_choice}")
 
         await asyncio.sleep(5)
         
@@ -1129,7 +1320,7 @@ class DaggerfallBot(commands.Bot):
         """Toggle enemy AI on/off"""
         logging.info("Executing toggle_enemy_ai command")
 
-        self.send_console_command("tai")
+        await self.send_console_command("tai")
 
         await asyncio.sleep(5)
         
@@ -1142,7 +1333,7 @@ class DaggerfallBot(commands.Bot):
         """Teleport outside building/dungeon or do nothing"""
         logging.info("Executing exit command")
 
-        send_game_input("=")
+        await asyncio.to_thread(send_game_input, "=")
         
         await asyncio.sleep(5)
         
@@ -1153,7 +1344,7 @@ class DaggerfallBot(commands.Bot):
         """Set gravity level (0–20)"""
         logging.info(f"Executing gravity command with level: {gravity_level}")
 
-        self.send_console_command(f"set_grav {gravity_level}")
+        await self.send_console_command(f"set_grav {gravity_level}")
 
         await asyncio.sleep(5)
         
@@ -1189,16 +1380,13 @@ class DaggerfallBot(commands.Bot):
             }
 
             # Start video
-            self.send_console_command(f"playvid {vid}")
-
-            # Look up duration (default 10s if not found)
-            secs = durations.get(n, 10)
-            await asyncio.sleep(secs)
-
-            # Close console after playback
-            send_game_input(GameKeys.ESC.value)
-            send_game_input(GameKeys.ESC.value)
-            send_game_input(GameKeys.CONSOLE.value)
+            async with self._game_ui():
+                await asyncio.to_thread(self._send_console_command_sync, f"playvid {vid}")
+                secs = durations.get(n, 10)
+                await asyncio.sleep(secs)
+                await asyncio.to_thread(send_game_input, GameKeys.ESC.value)
+                await asyncio.to_thread(send_game_input, GameKeys.ESC.value)
+                await asyncio.to_thread(send_game_input, GameKeys.CONSOLE.value)
         except Exception as e:
             logging.error(f"playvid error: {e}")
             if self.connected_channels:
@@ -1207,36 +1395,29 @@ class DaggerfallBot(commands.Bot):
     async def killall(self):
         """Kill all enemies"""
         logging.info("Executing killall command")
-        self.send_console_command("killall")
+        await self.send_console_command("killall")
    
-    def send_console_command(self, command: str):
+    async def send_console_command(self, command: str):
+        """Serialize only the console transaction, not unrelated chat commands."""
+        async with self._game_ui():
+            await asyncio.to_thread(self._send_console_command_sync, command)
+
+    def _send_console_command_sync(self, command: str):
         """Send command through game console"""
         logging.info(f"Sending console command: {command}")
         
         try:
-            # Get the game window
-            window = next((w for w in gw.getWindowsWithTitle("Daggerfall Unity") 
-                          if w.title == "Daggerfall Unity"), None)
-                          
-            if not window:
-                logging.warning("Game window not found for console command")
+            dialog = get_game_dialog()
+            if dialog is None:
                 return
-                
-            app = pywinauto.Application(backend="win32").connect(handle=window._hWnd)
-            dlg = app.window(handle=window._hWnd)
-            
-            # Open console
-            send_game_input(GameKeys.CONSOLE.value)
+
+            dialog.send_keystrokes(GameKeys.CONSOLE.value)
             time.sleep(0.5)
-            
             pyautogui.write(command)
             time.sleep(0.5)
-            
-            # Send ENTER and close console using regular game input
-            send_game_input("{ENTER}")
+            dialog.send_keystrokes("{ENTER}")
             time.sleep(1)
-            send_game_input(GameKeys.CONSOLE.value)
-            
+            dialog.send_keystrokes(GameKeys.CONSOLE.value)
         except Exception as e:
             logging.error(f"Error sending console command: {e}")
     
@@ -1606,12 +1787,12 @@ class DaggerfallBot(commands.Bot):
     async def save_game(self):
         """Save game state"""
         logging.info("Executing save command")
-        send_game_input(GameKeys.SAVE.value)
+        await asyncio.to_thread(send_game_input, GameKeys.SAVE.value)
 
     async def load_game(self):
         """Load last save"""
         logging.info("Executing load command")
-        send_game_input(GameKeys.LOAD.value)
+        await asyncio.to_thread(send_game_input, GameKeys.LOAD.value)
 
     async def exec_command(self, args):
         """Execute console command (admin only)"""
@@ -1619,7 +1800,7 @@ class DaggerfallBot(commands.Bot):
             await self.connected_channels[0].send("Usage: !exec <command> <args>")
             return
         logging.info(f"Executing admin command: {' '.join(args)}")
-        self.send_console_command(" ".join(args))
+        await self.send_console_command(" ".join(args))
 
     def _get_quests_from_response(self, response_data):
         """Return active and completed quest lists with legacy API fallbacks."""
