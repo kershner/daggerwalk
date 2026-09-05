@@ -42,6 +42,7 @@ class GameKeys(Enum):
     LOAD = "{F11}"
     CONSOLE = "`"
     ESC = "{ESC}"
+    CURSOR = "{ENTER}"
     USE = "k"
     CAMERA = "O"
 
@@ -62,6 +63,60 @@ class Config:
     MOUSE_STEP_PIXELS = 20
     MAX_PENDING_MOUSE_PIXELS = 5000
     MAX_PENDING_TRANSLATION_SECONDS = 10.0
+    COMMAND_ALIASES = {
+        "w": "walk",
+        "s": "stop",
+        "f": "forward",
+        "b": "back",
+        "l": "left",
+        "r": "right",
+        "u": "up",
+        "d": "down",
+        "j": "jump",
+    }
+    HELP_COMMANDS = (
+        "walk", "stop", "jump", "left", "right", "up", "down", "forward",
+        "back", "cursor", "click", "map", "song", "state", "more",
+    )
+    MORE_COMMANDS = (
+        "info", "quest", "use", "weather", "levitate", "toggle_ai", "exit",
+        "gravity", "playvid", "modlist", "shotgun", "camera", "killall", "bighop",
+    )
+    COMMAND_HELP = {
+        "walk": "Start autowalk • Usage: !walk",
+        "stop": "Stop autowalk and clear all pending movement • Usage: !stop",
+        "jump": "Jump repeatedly • Usage: !jump",
+        "left": "Look left smoothly by an optional amount from 1–100 (default 10) • Usage: !left [amount]",
+        "right": "Look right smoothly by an optional amount from 1–100 (default 10) • Usage: !right [amount]",
+        "up": "Look up smoothly by an optional amount from 1–100 (default 10) • Usage: !up [amount]",
+        "down": "Look down smoothly by an optional amount from 1–100 (default 10) • Usage: !down [amount]",
+        "forward": "Hold forward by an optional amount from 1–100 (default 10) • Usage: !forward [amount]",
+        "back": "Hold backward by an optional amount from 1–100 (default 10) • Usage: !back [amount]",
+        "cursor": "Toggle the in-game cursor by pressing Enter • Usage: !cursor",
+        "click": "Click the left mouse button • Usage: !click",
+        "map": "Briefly show the world map • Usage: !map",
+        "song": "Start a vote to change the music • Usage: !song <number|random|category>",
+        "state": "Show the bot's current local settings • Usage: !state",
+        "help": "List commands or show details for one command • Usage: !help [command]",
+        "more": "List additional commands • Usage: !more",
+        "info": "Show current journey and character information • Usage: !info",
+        "quest": "Show active quests or one quest slot • Usage: !quest [1-3]",
+        "use": "Use or activate the targeted object • Usage: !use",
+        "weather": "Start a vote to change the weather • Usage: !weather <type>",
+        "levitate": "Start a vote to toggle levitation • Usage: !levitate <on|off>",
+        "toggle_ai": "Start a vote to toggle enemy AI • Usage: !toggle_ai",
+        "exit": "Start a vote to teleport outside the current building • Usage: !exit",
+        "gravity": "Start a vote to set gravity from 0–20 • Usage: !gravity <0-20>",
+        "playvid": "Start a vote to play a video numbered 0–15 • Usage: !playvid <0-15>",
+        "modlist": "List the active Daggerfall Unity mods • Usage: !modlist",
+        "shotgun": "Raise, fire, and lower the equipped shotgun • Usage: !shotgun",
+        "camera": "Start a vote to toggle the third-person camera • Usage: !camera",
+        "killall": "Kill all nearby enemies • Usage: !killall",
+        "bighop": "Run the extended unstuck movement sequence • Usage: !bighop",
+        "save": "Admin only: save the game • Usage: !save",
+        "load": "Admin only: load the latest save • Usage: !load",
+        "exec": "Admin only: run a game-console command • Usage: !exec <command>",
+    }
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
     DJANGO_LOG_URL = "https://kershner.org/daggerwalk/log/"
     QUEST_COMPLETION_STATE_FILE = "quest_completion_state.json"
@@ -188,6 +243,12 @@ def focus_game_window() -> bool:
 def move_mouse_relative(dx: int, dy: int):
     """Send one relative mouse movement event."""
     ctypes.windll.user32.mouse_event(0x0001, int(dx), int(dy), 0, 0)
+
+
+def left_click():
+    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+    time.sleep(0.1)
+    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
 
 
 def set_movement_key(key: str, pressed: bool):
@@ -437,7 +498,10 @@ class DaggerfallBot(commands.Bot):
         if not self._dev_mode:
             await self.set_stream_tags()
 
-        self.refresh_task = asyncio.create_task(self.data_refresh_loop())
+        if self._dev_mode:
+            self._state_ready.set()
+        else:
+            self.refresh_task = asyncio.create_task(self.data_refresh_loop())
         self.autosave_task = asyncio.create_task(self.autosave_loop())
         self.message_task = asyncio.create_task(self.message_scheduler())
         self.crash_monitor_task = asyncio.create_task(self.crash_monitor())
@@ -831,6 +895,9 @@ class DaggerfallBot(commands.Bot):
 
     async def refresh_now(self):
         """Refresh cached data and reliably process completion events."""
+        if getattr(self, "_dev_mode", False):
+            logging.info("Skipping server refresh in dev mode")
+            return False
         async with self._refresh_lock:
             try:
                 data = await self.get_map_json_data()
@@ -878,7 +945,7 @@ class DaggerfallBot(commands.Bot):
         while True:
             await asyncio.sleep(10)
             if not self.is_daggerfall_running():
-                logging.error("Daggerfall Unity process not found — assuming crash")
+                logging.error("Daggerfall Unity process not found; assuming crash")
                 if self.connected_channels:
                     try:
                         await self.connected_channels[0].send(
@@ -891,6 +958,8 @@ class DaggerfallBot(commands.Bot):
 
     async def log_chat_command(self, username, command, args):
         """Append chat commands to a local log file"""
+        if self._dev_mode:
+            return
         timestamp = datetime.now(timezone.utc).isoformat()
         entry = f"{timestamp} | {username} | {command} | {' '.join(args)}\n"
         try:
@@ -911,16 +980,18 @@ class DaggerfallBot(commands.Bot):
             return
             
         command = parts[0][1:].lower()  # Remove ! prefix
+        command = Config.COMMAND_ALIASES.get(command, command)
         args = parts[1:] if len(parts) > 1 else []
 
-        # Log the command asynchronously to a local file
-        try:
-            ts = datetime.now(timezone.utc).isoformat()
-            logline = f"{ts} | {message.author.name} | {command} | {' '.join(args)}\n"
-            async with aiofiles.open("chat_commands_log.txt", mode="a") as f:
-                await f.write(logline)
-        except Exception as e:
-            logging.error(f"Failed to log chat command: {e}")
+        # This file is uploaded on the next production refresh, so never mix in dev commands.
+        if not getattr(self, "_dev_mode", False):
+            try:
+                ts = datetime.now(timezone.utc).isoformat()
+                logline = f"{ts} | {message.author.name} | {command} | {' '.join(args)}\n"
+                async with aiofiles.open("chat_commands_log.txt", mode="a") as f:
+                    await f.write(logline)
+            except Exception as e:
+                logging.error(f"Failed to log chat command: {e}")
 
         # Handle voting commands
         if command in self.votable_commands:
@@ -949,15 +1020,16 @@ class DaggerfallBot(commands.Bot):
             "jump": lambda: self.send_movement(GameKeys.JUMP, repeat=10),
             "stop": lambda: self.stop_movement(message.channel),
             "use": lambda: self.send_movement(GameKeys.USE),
+            "cursor": self.toggle_cursor,
+            "click": self.send_click,
             "map": self.toggle_map,
             "bighop": self.bighop,
             "shotgun": self.use_shotgun,
             "save": lambda: self.admin_command(message, self.save_game),
             "load": lambda: self.admin_command(message, self.load_game),
             "modlist": self.modlist,
-            "help": self.help,
+            "help": lambda: self.help(args),
             "exec": lambda: self.admin_command(message, lambda: self.exec_command(args)),
-            "esc": lambda: self.send_movement(GameKeys.ESC, args),
             "killall": self.killall,
             "info": self.game_info,
             "more": self.more_commands,
@@ -1020,6 +1092,15 @@ class DaggerfallBot(commands.Bot):
         async with self._game_ui():
             await asyncio.to_thread(send_game_input, GameKeys.BACK.value, 1, 0.1)
         await channel.send("All movement stopped.")
+
+    async def toggle_cursor(self):
+        async with self._game_ui():
+            await asyncio.to_thread(send_game_input, GameKeys.CURSOR.value)
+
+    async def send_click(self):
+        async with self._game_ui():
+            if await asyncio.to_thread(focus_game_window):
+                await asyncio.to_thread(left_click)
 
     def validate_song_arg(self, args):
         """Validate song selection"""
@@ -1543,7 +1624,7 @@ class DaggerfallBot(commands.Bot):
             ):
                 ok = await self.refresh_now()
                 if not ok and self.connected_channels:
-                    await self.connected_channels[0].send("No info yet — gathering data…")
+                    await self.connected_channels[0].send("No info yet. Gathering data…")
                     return
 
             # Cache music tracks if needed
@@ -1749,32 +1830,40 @@ class DaggerfallBot(commands.Bot):
             import traceback
             logging.error(traceback.format_exc())
 
-    async def help(self):
-        """Display available commands"""
+    async def help(self, args=None):
+        """List commands or describe one command and its aliases."""
         logging.info("Executing help command")
         channel = self.connected_channels[0]
-        
-        combined_message = (
-            "💀🌲Daggerwalk Commands: "
-            "!walk • !stop • !jump • !left • "
-            "!right • !up • !down • !forward • "
-            "!back • !map • !song • !state • "
-            "!more"
+
+        if args:
+            requested = args[0].lower().lstrip("!")
+            command = Config.COMMAND_ALIASES.get(requested, requested)
+            detail = Config.COMMAND_HELP.get(command)
+            if not detail:
+                await channel.send(f"Unknown command: !{requested}. Use !help for the command list.")
+                return
+            aliases = [
+                f"!{alias}" for alias, target in Config.COMMAND_ALIASES.items()
+                if target == command
+            ]
+            suffix = f" • Aliases: {', '.join(aliases)}" if aliases else ""
+            await channel.send(f"!{command}: {detail}{suffix}")
+            return
+
+        commands_text = " • ".join(f"!{command}" for command in Config.HELP_COMMANDS)
+        await channel.send(
+            f"💀🌲Daggerwalk Commands: {commands_text} "
+            "• Details: !help <command>"
         )
-        
-        await channel.send(combined_message)
 
     async def more_commands(self):
         """Display more commands"""
         logging.info("Executing more commands")
         channel = self.connected_channels[0]
-        
-        combined_message = (
-            "🗡️More Daggerwalk Commands: "
-            "!info • !quest • !use • !weather • !levitate • !toggle_ai • !exit • !gravity • !playvid • !modlist • !shotgun • !camera • !esc • !killall • !bighop"
+        commands_text = " • ".join(f"!{command}" for command in Config.MORE_COMMANDS)
+        await channel.send(
+            f"🗡️More Daggerwalk Commands: {commands_text} • Details: !help <command>"
         )
-        
-        await channel.send(combined_message)
     
     async def modlist(self):
         """Display active mods"""
@@ -1843,8 +1932,8 @@ class DaggerfallBot(commands.Bot):
         giver = quest.get("quest_giver_name")
         line = f"🧭Quest {quest.get('slot')}: {description}"
         if giver:
-            line += f" — {giver}"
-        line += f" — {quest.get('xp', 0)} XP"
+            line += f" • {giver}"
+        line += f" • {quest.get('xp', 0)} XP"
 
         x = poi.get("map_pixel_x")
         y = poi.get("map_pixel_y")
@@ -1867,8 +1956,8 @@ class DaggerfallBot(commands.Bot):
         line = f"📜New Quest {quest.get('slot')}: {name}"
         giver = quest.get("quest_giver_name")
         if giver:
-            line += f" — {giver}"
-        line += f" — {quest.get('xp', 0)} XP"
+            line += f" • {giver}"
+        line += f" • {quest.get('xp', 0)} XP"
 
         url = "https://kershner.org/daggerwalk"
         x = poi.get("map_pixel_x")
