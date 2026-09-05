@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone, date
 from twitchio.ext import commands
 import pygetwindow as gw
 from enum import Enum
-import bluesky_live
 import subprocess
 import pywinauto
 import pyautogui
@@ -232,8 +231,10 @@ def post_to_django(data, reset=False):
         logging.error(f"Error posting to Django: {str(e)}")
 
 class DaggerfallBot(commands.Bot):
-    def __init__(self):
-        client_id, oauth = Config.get_oauth()
+    def __init__(self, dev_channel=None):
+        self._dev_channel = dev_channel
+        self._dev_mode = dev_channel is not None
+        oauth = "dev" if self._dev_mode else Config.get_oauth()[1]
         super().__init__(token=oauth, prefix="!", initial_channels=[Config.TWITCH_CHANNEL])
         
         self._bot_started_at_monotonic = time.monotonic()
@@ -276,7 +277,16 @@ class DaggerfallBot(commands.Bot):
         
         # Bluesky client initialization
         self.bluesky_client = None
-        self._init_bluesky()
+        if not self._dev_mode:
+            self._init_bluesky()
+
+
+    @property
+    def connected_channels(self):
+        """Use the browser-backed channel when running without Twitch."""
+        if self._dev_channel is not None:
+            return [self._dev_channel]
+        return super().connected_channels
 
 
     def _update_state(self, key, value):
@@ -291,6 +301,9 @@ class DaggerfallBot(commands.Bot):
 
     def _init_bluesky(self):
         try:
+            global bluesky_live
+            import bluesky_live
+
             handle, password = Config.get_bluesky_credentials()
             self.bluesky_client = bluesky_live.login(handle, password)
             if self.bluesky_client:
@@ -302,13 +315,18 @@ class DaggerfallBot(commands.Bot):
 
     async def event_ready(self):
         logging.info(f"Bot online as {self.nick}")
+        await self._start_runtime()
+
+    async def _start_runtime(self):
+        """Start the same background services for Twitch and local dev mode."""
         if self._startup_tasks_started:
-            logging.info("event_ready called again — tasks already started; ignoring.")
+            logging.info("Runtime tasks already started; ignoring duplicate startup.")
             return
         self._startup_tasks_started = True
-        
-        await self.set_stream_tags()
-        
+
+        if not self._dev_mode:
+            await self.set_stream_tags()
+
         self.refresh_task = asyncio.create_task(self.data_refresh_loop())
         self.autosave_task = asyncio.create_task(self.autosave_loop())
         self.message_task = asyncio.create_task(self.message_scheduler())

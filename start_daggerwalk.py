@@ -3,10 +3,10 @@ import time
 import psutil
 import logging
 import os
+import argparse
 import pyautogui
 import pygetwindow as gw
 from pathlib import Path
-import youtube_create_broadcast
 
 # Configure logging
 LOG_FILE = "daggerwalk.log"
@@ -19,10 +19,20 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(console_handler)
 
-DAGGERFALL_EXE = r"C:\Daggerwalk\DaggerfallUnity\DaggerfallUnity.exe"
+def first_existing_path(*paths):
+    return next((path for path in paths if os.path.isfile(path)), paths[0])
+
+
+DAGGERFALL_EXE = first_existing_path(
+    r"C:\Daggerwalk\DaggerfallUnity\DaggerfallUnity.exe",  # production
+    r"C:\DaggerfalUnity\1.1.1\DaggerfallUnity.exe",       # local dev
+)
 OBS_EXE = r"C:\Program Files\obs-studio\bin\64bit\obs64.exe"
 VIRTUAL_AUDIO_DEVICE = "VB-Audio Virtual Cable"
-SOUNDVOLUMEVIEW_PATH = r"C:\Daggerwalk\Utilities\SoundVolumeView\SoundVolumeView.exe"
+SOUNDVOLUMEVIEW_PATH = first_existing_path(
+    r"C:\Daggerwalk\Utilities\SoundVolumeView\SoundVolumeView.exe",  # production
+    r"C:\Daggerwalk\SoundVolumeView\SoundVolumeView.exe",            # local dev
+)
 
 # === Readiness flag ===
 READY_FLAG = Path(r"C:\Daggerwalk\runtime\dfu_ready.flag")
@@ -229,36 +239,49 @@ def ensure_dfu_ready(timeout=240):
         logging.error("Timed out waiting for DFU readiness")
     return ok
 
-def run_bot_supervised():
+def run_control_supervised(control_mode):
     base = os.path.dirname(__file__)
-    # Prefer pythonw.exe to avoid a console window (fallback to python.exe + NO_WINDOW)
     pyw = os.path.join(base, "daggerwalk_venv", "Scripts", "pythonw.exe")
     pye = os.path.join(base, "daggerwalk_venv", "Scripts", "python.exe")
-    exe = pyw if os.path.exists(pyw) else pye
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if exe == pye else 0
 
-    bot = os.path.join(base, "daggerwalk_twitch_bot.py")
+    if control_mode == "dev":
+        exe = pye
+        command = [exe, os.path.join(base, "dev_server.py")]
+        label = "dev server"
+        flags = 0
+    else:
+        # Prefer pythonw.exe for the production bot to avoid a second console.
+        exe = pyw if os.path.exists(pyw) else pye
+        command = [exe, os.path.join(base, "daggerwalk_twitch_bot.py")]
+        label = "Twitch bot"
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if exe == pye else 0
 
     while True:
-        # Always ensure DFU is staged before (re)starting the bot
+        # Both modes pass through the same game startup/readiness gate.
         ensure_dfu_ready(timeout=240)
 
-        logging.info(f"Launching Twitch bot ({'pythonw' if exe==pyw else 'python + NO_WINDOW'})...")
-        p = subprocess.Popen([exe, bot], cwd=base, creationflags=flags)
-        rc = p.wait()
-        logging.warning(f"Bot exited with code {rc}. Relaunching in 5s...")
+        logging.info(f"Launching {label}...")
+        process = subprocess.Popen(command, cwd=base, creationflags=flags)
+        rc = process.wait()
+        logging.warning(f"{label.title()} exited with code {rc}. Relaunching in 5s...")
         time.sleep(5)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["dev", "twitch"], default="twitch")
+    return parser.parse_args()
 
 # Main execution loop
 if __name__ == "__main__":
+    args = parse_args()
     logging.info("=== Starting DaggerWalk Automation ===")
+    logging.info(f"Control mode: {args.mode}")
 
-    # try:
-    #     logging.info("Creating YouTube broadcast...")
-    #     youtube_create_broadcast.create_daily_broadcast()
-    # except Exception as e:
-    #     logging.error(f"Failed to create YouTube broadcast: {e}")
-    
-    start_obs()
+    if args.mode == "twitch":
+        start_obs()
+    else:
+        logging.info("Dev mode — skipping OBS and Twitch connectivity.")
+
     # First-time DFU setup and every restart are gated inside the supervisor loop
-    run_bot_supervised()
+    run_control_supervised(args.mode)
