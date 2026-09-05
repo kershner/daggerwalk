@@ -41,8 +41,6 @@ class GameKeys(Enum):
     ESC = "{ESC}"
     USE = "k"
     CAMERA = "O"
-    CROUCH = "c"
-    CENTER = "{HOME}"
 
 class Config:
     """Bot configuration settings"""
@@ -264,7 +262,6 @@ class DaggerfallBot(commands.Bot):
         }
         
         self.votable_commands = {
-            "reset": "reset to last known location",
             "song": "change the background music",
             "weather": "change the weather",
             "levitate": "start or stop levitating",
@@ -797,13 +794,10 @@ class DaggerfallBot(commands.Bot):
             "right": lambda: self.handle_movement_arg_required(message, GameKeys.RIGHT, args),
             "up": lambda: self.handle_movement_arg_required(message, GameKeys.UP, args),
             "down": lambda: self.handle_movement_arg_required(message, GameKeys.DOWN, args),
-            "crouch": lambda: self.handle_movement_arg_required(message, GameKeys.CROUCH, args),
             "jump": lambda: self.send_movement(GameKeys.JUMP, repeat=10),
             "stop": lambda: self.handle_movement_arg_required(message, GameKeys.BACK, ["1"]),
             "use": lambda: self.send_movement(GameKeys.USE),
-            "center": lambda: self.send_movement(GameKeys.CENTER),
             "map": self.toggle_map,
-            "camera": self.toggle_camera,
             "bighop": self.bighop,
             "shotgun": self.use_shotgun,
             "save": lambda: self.admin_command(message, self.save_game),
@@ -983,9 +977,7 @@ class DaggerfallBot(commands.Bot):
         await asyncio.sleep(Config.CHAT_DELAY)
         
         logging.info(f"Executing voted command: {self.current_vote_type}")
-        if self.current_vote_type == "reset":
-            await self.reset()
-        elif self.current_vote_type == "song":
+        if self.current_vote_type == "song":
             args = self.current_vote_message.content.split()[1:]
             
             if args and args[0].lower() == "category":
@@ -1078,20 +1070,6 @@ class DaggerfallBot(commands.Bot):
         time.sleep(2)
         send_game_input('Z')
 
-    async def reset(self):
-        """Reset to random location"""
-        logging.info("Executing reset command")
-        
-        data = await self.get_map_json_data()
-        
-        cmd = f"tele2pixel {data['mapPixelX']} {data['mapPixelY']}"
-        self.send_console_command(cmd)
-        
-        await asyncio.sleep(5)
-
-        channel = self.connected_channels[0]
-        await channel.send('Sent to last known location!')
-        
     async def song(self, choice=None):
         """Change background music"""
         logging.info(f"Executing song command with choice: {choice}")
@@ -1598,7 +1576,7 @@ class DaggerfallBot(commands.Bot):
             "💀🌲Daggerwalk Commands: "
             "!walk • !stop • !jump • !left • "
             "!right • !up • !down • !forward • "
-            "!back • !crouch • !map • !song • !state • "
+            "!back • !map • !song • !state • "
             "!more"
         )
         
@@ -1611,7 +1589,7 @@ class DaggerfallBot(commands.Bot):
         
         combined_message = (
             "🗡️More Daggerwalk Commands: "
-            "!info • !quest • !use • !center • !weather • !levitate • !toggle_ai • !exit • !gravity • !playvid • !modlist • !shotgun • !camera • !esc"
+            "!info • !quest • !use • !weather • !levitate • !toggle_ai • !exit • !gravity • !playvid • !modlist • !shotgun • !camera • !esc • !killall • !bighop"
         )
         
         await channel.send(combined_message)
