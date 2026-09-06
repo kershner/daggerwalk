@@ -36,6 +36,7 @@ class GameKeys(Enum):
     RIGHT = "d"
     UP = "{INSERT}"
     DOWN = "{DELETE}"
+    CENTER = "{HOME}"
     JUMP = "{SPACE}"
     MAP = "v"
     SAVE = "{F9}"
@@ -75,8 +76,8 @@ class Config:
         "j": "jump",
     }
     HELP_COMMANDS = (
-        "walk", "stop", "jump", "left", "right", "up", "down", "forward",
-        "back", "cursor", "click", "map", "song", "state", "more",
+        "walk", "stop", "jump", "left", "right", "up", "down", "center",
+        "forward", "back", "cursor", "click", "map", "song", "state", "more",
     )
     MORE_COMMANDS = (
         "info", "quest", "use", "weather", "levitate", "toggle_ai", "exit",
@@ -90,6 +91,7 @@ class Config:
         "right": "Look right smoothly by an optional amount from 1–100 (default 10) • Usage: !right [amount]",
         "up": "Look up smoothly by an optional amount from 1–100 (default 10) • Usage: !up [amount]",
         "down": "Look down smoothly by an optional amount from 1–100 (default 10) • Usage: !down [amount]",
+        "center": "Center the view by pressing Home • Usage: !center",
         "forward": "Hold forward by an optional amount from 1–100 (default 10) • Usage: !forward [amount]",
         "back": "Hold backward by an optional amount from 1–100 (default 10) • Usage: !back [amount]",
         "cursor": "Toggle the in-game cursor by pressing Enter • Usage: !cursor",
@@ -1072,6 +1074,7 @@ class DaggerfallBot(commands.Bot):
             "right": lambda: self.send_movement(GameKeys.RIGHT, args),
             "up": lambda: self.send_movement(GameKeys.UP, args),
             "down": lambda: self.send_movement(GameKeys.DOWN, args),
+            "center": lambda: self.send_movement(GameKeys.CENTER),
             "jump": lambda: self.send_movement(GameKeys.JUMP, repeat=10),
             "stop": lambda: self.stop_movement(message.channel),
             "use": lambda: self.send_movement(GameKeys.USE),

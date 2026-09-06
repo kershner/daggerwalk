@@ -141,10 +141,10 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         bot._start_command_task = lambda name, factory: dispatched.append(name)
 
         with patch.object(bot_module.aiofiles, "open", return_value=AsyncFileStub()):
-            for command in ("!w", "!cursor", "!click", "!torch", "!left_click", "!right_click", "!esc"):
+            for command in ("!w", "!cursor", "!click", "!torch", "!center", "!left_click", "!right_click", "!esc"):
                 await bot.event_message(Message(command, channel))
 
-        self.assertEqual(dispatched, ["walk", "cursor", "click", "torch"])
+        self.assertEqual(dispatched, ["walk", "cursor", "click", "torch", "center"])
 
     async def test_movement_alias_preserves_parameters(self):
         bot = self.make_bot()
@@ -263,6 +263,19 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
 
         send_key.assert_called_once_with(bot_module.GameKeys.CURSOR.value)
         click.assert_called_once_with()
+
+    async def test_center_sends_home_key(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+
+        with patch.object(bot_module.asyncio, "to_thread", AsyncMock()) as to_thread:
+            await bot.send_movement(bot_module.GameKeys.CENTER)
+
+        to_thread.assert_awaited_once_with(
+            bot_module.send_game_input,
+            bot_module.GameKeys.CENTER.value,
+            1,
+            0.15,
+        )
 
 
 class TorchCommandTests(unittest.IsolatedAsyncioTestCase):
