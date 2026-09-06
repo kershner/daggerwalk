@@ -1,6 +1,7 @@
 import sys
 import types
 import unittest
+from unittest.mock import AsyncMock, patch
 
 
 bluesky_stub = types.ModuleType("bluesky_live")
@@ -92,6 +93,43 @@ class LiveTextTests(unittest.TestCase):
             title,
             "Walking through Wayrest on a thunderstorming mid Summer night (9 pm)",
         )
+
+
+class LiveTitleUpdateTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.bot = object.__new__(bot_module.DaggerfallBot)
+        self.bot._latest_response_data = None
+        self.bot._last_stream_title = None
+        self.bot._last_stream_title_update_at = 0.0
+        self.bot._twitch_title_retry_at = 0.0
+        self.bot._dev_mode = False
+        self.bot.state = {"bluesky_live_text": ""}
+        self.bot.update_stream_title = AsyncMock(return_value=True)
+
+    @staticmethod
+    def local_data(time_str):
+        return {
+            "region": "Wayrest",
+            "location": "Wayrest",
+            "weather": "Rainy",
+            "date": f"Tirdas, 12 Sun's Height, 3E 405, {time_str}",
+        }
+
+    async def test_title_updates_are_coalesced_to_one_per_minute(self):
+        with patch.object(bot_module.time, "monotonic", side_effect=[100.0, 130.0, 161.0]):
+            self.assertTrue(await self.bot._maybe_update_stream_title(self.local_data("18:00:00")))
+            self.assertFalse(await self.bot._maybe_update_stream_title(self.local_data("18:30:00")))
+            self.assertTrue(await self.bot._maybe_update_stream_title(self.local_data("19:00:00")))
+
+        self.assertEqual(self.bot.update_stream_title.await_count, 2)
+
+    async def test_identical_title_does_not_call_twitch_again(self):
+        data = self.local_data("18:30:00")
+        with patch.object(bot_module.time, "monotonic", side_effect=[100.0, 200.0]):
+            self.assertTrue(await self.bot._maybe_update_stream_title(data))
+            self.assertFalse(await self.bot._maybe_update_stream_title(data))
+
+        self.bot.update_stream_title.assert_awaited_once()
 
 
 if __name__ == "__main__":

@@ -53,6 +53,8 @@ class Config:
     TWITCH_CHANNEL = "daggerwalk"
     BOT_USERNAME = "daggerwalk_bot"
     REFRESH_INTERVAL = 300  # 5 minutes
+    LOCAL_STATE_REFRESH_INTERVAL = 30  # seconds
+    TWITCH_TITLE_MIN_INTERVAL = 60  # seconds
     AUTOSAVE_INTERVAL = 600  # 10 minutes
     CHAT_DELAY = 1.5  # seconds
     VOTING_DURATION = 20  # seconds
@@ -386,7 +388,7 @@ def post_to_django(data, reset=False):
             # Add next_log_time to the local state
             try:
                 est = pytz.timezone("US/Eastern")
-                next_time = datetime.now(est) + timedelta(minutes=5)
+                next_time = datetime.now(est) + timedelta(seconds=Config.REFRESH_INTERVAL)
                 if hasattr(bot_instance := globals().get("bot"), "_update_state"):
                     bot_instance._update_state("next_log_time", next_time)
             except Exception as e:
@@ -415,6 +417,12 @@ class DaggerfallBot(commands.Bot):
         self._latest_response_at = None
         self._recent_world_positions = []
         self._latest_command_state = None
+        self._last_stream_title = None
+        self._last_stream_title_update_at = 0.0
+        self._twitch_title_retry_at = 0.0
+        self._twitch_broadcaster_id = None
+        self._twitch_api_session = None
+        self._last_quest_arrival_key = None
         self.last_autosave = datetime.now(timezone.utc)
         self.voting_active = False
         self.current_vote_type = None
@@ -495,6 +503,13 @@ class DaggerfallBot(commands.Bot):
     async def event_ready(self):
         logging.info(f"Bot online as {self.nick}")
         await self._start_runtime()
+
+    async def close(self):
+        """Close long-lived resources before disconnecting the bot."""
+        session = getattr(self, "_twitch_api_session", None)
+        if session and not session.closed:
+            await session.close()
+        await super().close()
 
     async def _start_runtime(self):
         """Start the same background services for Twitch and local dev mode."""
@@ -628,6 +643,17 @@ class DaggerfallBot(commands.Bot):
         first_success = False
         while True:
             try:
+                # An event-driven refresh (for example, reaching a quest POI) also
+                # counts as the latest persisted snapshot. Avoid following it with
+                # another routine write just because this loop's old timer expired.
+                if self._latest_response_at:
+                    age = (
+                        datetime.now(timezone.utc) - self._latest_response_at
+                    ).total_seconds()
+                    if age < Config.REFRESH_INTERVAL:
+                        await asyncio.sleep(Config.REFRESH_INTERVAL - age)
+                        continue
+
                 if await self.refresh_now():
                     if not first_success:
                         first_success = True
@@ -914,7 +940,7 @@ class DaggerfallBot(commands.Bot):
 
 
     async def local_state_refresh_loop(self):
-        """Check MapData.json periodically for song changes."""
+        """Sample local game state without increasing routine server writes."""
         await self._state_ready.wait()
         logging.info("Starting local state refresh loop")
 
@@ -925,8 +951,6 @@ class DaggerfallBot(commands.Bot):
             self._track_map = {track["TrackName"]: track["TrackID"] for track in self._music_tracks}
 
         last_song = self.state.get("song")
-        last_weather = self.state.get("weather")
-
         while True:
             try:
                 data = await self.get_map_json_data()
@@ -939,10 +963,64 @@ class DaggerfallBot(commands.Bot):
                     last_song = new_song_name
                     logging.info(f"Detected new song: {song_display}")
 
+                await self._maybe_update_stream_title(data)
+                await self._maybe_submit_quest_arrival(data)
+
             except Exception as e:
                 logging.error(f"local_state_refresh_loop error: {e}")
 
-            await asyncio.sleep(30)
+            await asyncio.sleep(Config.LOCAL_STATE_REFRESH_INTERVAL)
+
+    @staticmethod
+    def _normalized_location(value):
+        return str(value or "").strip().casefold()
+
+    def _matching_active_quest(self, data):
+        """Return the active quest whose named destination matches local state."""
+        if not self._latest_response_data:
+            return None
+
+        current_location = self._normalized_location(data.get("location"))
+        current_region = self._normalized_location(data.get("region"))
+        if not current_location or not current_region:
+            return None
+
+        active_quests, _ = self._get_quests_from_response(self._latest_response_data)
+        for quest in active_quests:
+            poi = quest.get("poi") or {}
+            poi_region = poi.get("region") or {}
+            region_name = (
+                poi_region.get("name") if isinstance(poi_region, dict) else poi_region
+            )
+            if (
+                current_location == self._normalized_location(poi.get("name"))
+                and current_region == self._normalized_location(region_name)
+            ):
+                return quest
+        return None
+
+    async def _maybe_submit_quest_arrival(self, data):
+        """Persist immediately on entry to an active quest destination."""
+        quest = self._matching_active_quest(data)
+        if not quest:
+            self._last_quest_arrival_key = None
+            return False
+
+        arrival_key = self._quest_completion_key(quest)
+        if arrival_key == self._last_quest_arrival_key:
+            return False
+
+        self._last_quest_arrival_key = arrival_key
+        logging.info(
+            "Active quest destination reached locally; submitting immediately: %s",
+            arrival_key,
+        )
+        if await self.refresh_now():
+            return True
+
+        # A network/server failure should be retried on the next local sample.
+        self._last_quest_arrival_key = None
+        return False
 
     async def refresh_now(self):
         """Refresh cached data and reliably process completion events."""
@@ -1089,7 +1167,7 @@ class DaggerfallBot(commands.Bot):
             "help": lambda: self.help(args),
             "exec": lambda: self.admin_command(message, lambda: self.exec_command(args)),
             "killall": self.killall,
-            "info": self.game_info,
+            "info": lambda: self.game_info(use_local=True),
             "more": self.more_commands,
             "quest": lambda: self.quest(args),
             "state": self.show_state,
@@ -1666,7 +1744,12 @@ class DaggerfallBot(commands.Bot):
             if oauth_token.startswith("oauth:"):
                 oauth_token = oauth_token[6:]
 
-            async with aiohttp.ClientSession() as session:
+            session = self._twitch_api_session
+            if session is None or session.closed:
+                session = aiohttp.ClientSession()
+                self._twitch_api_session = session
+
+            if not self._twitch_broadcaster_id:
                 async with session.get(
                     "https://api.twitch.tv/helix/users",
                     headers={
@@ -1674,40 +1757,114 @@ class DaggerfallBot(commands.Bot):
                         "Authorization": f"Bearer {oauth_token}",
                     }
                 ) as resp:
+                    if resp.status != 200:
+                        err = await resp.text()
+                        raise Exception(f"Could not resolve broadcaster: {resp.status} - {err}")
                     data = await resp.json()
-                    broadcaster_id = data["data"][0]["id"]
+                    self._twitch_broadcaster_id = data["data"][0]["id"]
 
-                async with session.patch(
-                    f"https://api.twitch.tv/helix/channels?broadcaster_id={broadcaster_id}",
-                    headers={
-                        "Client-ID": client_id,
-                        "Authorization": f"Bearer {oauth_token}",
-                        "Content-Type": "application/json"
-                    },
-                    json={"title": title}
-                ) as patch_resp:
-                    if patch_resp.status == 204:
-                        logging.info(f"Stream title updated to: {title}")
-                    else:
-                        err = await patch_resp.text()
-                        raise Exception(f"{patch_resp.status} - {err}")
+            async with session.patch(
+                f"https://api.twitch.tv/helix/channels?broadcaster_id={self._twitch_broadcaster_id}",
+                headers={
+                    "Client-ID": client_id,
+                    "Authorization": f"Bearer {oauth_token}",
+                    "Content-Type": "application/json"
+                },
+                json={"title": title}
+            ) as patch_resp:
+                if patch_resp.status == 204:
+                    logging.info(f"Stream title updated to: {title}")
+                    return True
+                if patch_resp.status == 429:
+                    reset_at = patch_resp.headers.get("Ratelimit-Reset")
+                    retry_delay = 60.0
+                    if reset_at:
+                        try:
+                            retry_delay = max(1.0, float(reset_at) - time.time())
+                        except ValueError:
+                            pass
+                    self._twitch_title_retry_at = time.monotonic() + retry_delay
+                err = await patch_resp.text()
+                raise Exception(f"{patch_resp.status} - {err}")
 
         except Exception as e:
             logging.error(f"Failed to update stream title: {e}")
+            return False
 
-    async def game_info(self):
-        """Display game state information (cached only)."""
+    def _local_live_fields(self, data):
+        """Extract title inputs from raw local MapData and cached ocean context."""
+        region = str(data.get("region") or "").strip()
+        weather = str(data.get("weather") or "").strip()
+        date_str = str(data.get("date") or "").strip()
+        time_str = date_str.rsplit(",", 1)[-1].strip() if "," in date_str else ""
+        last_known_region = ""
+
+        if region.casefold() == "ocean" and self._latest_response_data:
+            log = self._latest_response_data.get("log") or {}
+            cached_region = log.get("last_known_region") or {}
+            if isinstance(cached_region, dict):
+                last_known_region = str(cached_region.get("name") or "").strip()
+            else:
+                last_known_region = str(cached_region).strip()
+
+        return region, weather, time_str, date_str, last_known_region
+
+    async def _maybe_update_stream_title(self, data):
+        """Coalesce local changes and PATCH Twitch at most once per minute."""
+        region, weather, time_str, date_str, last_known_region = self._local_live_fields(data)
+        if not region or not weather or not time_str:
+            return False
+
+        try:
+            title = self.build_live_text(
+                region, weather, time_str, date_str, last_known_region
+            )
+        except ValueError:
+            logging.warning("Skipping Twitch title update: invalid local game time %r", time_str)
+            return False
+
+        self._update_state("bluesky_live_text", title)
+        if self._dev_mode or title == self._last_stream_title:
+            return False
+
+        now = time.monotonic()
+        if now < self._twitch_title_retry_at:
+            return False
+        if (
+            self._last_stream_title_update_at
+            and now - self._last_stream_title_update_at < Config.TWITCH_TITLE_MIN_INTERVAL
+        ):
+            return False
+
+        if await self.update_stream_title(
+            region, weather, time_str, date_str, last_known_region
+        ):
+            self._last_stream_title = title
+            self._last_stream_title_update_at = now
+            return True
+        return False
+
+    async def game_info(self, use_local=False):
+        """Display game state, optionally overlaying a fresh local snapshot."""
         
         try:
-            # Ensure we have cached data; do a one-shot refresh if empty or very stale
-            if not self._latest_response_data or (
+            local_data = await self.get_map_json_data() if use_local else None
+
+            # Scheduled announcements retain the persisted five-minute behavior.
+            # Interactive !info must never create a server write just to get fresh data.
+            if not use_local and (not self._latest_response_data or (
                 self._latest_response_at and
                 (datetime.now(timezone.utc) - self._latest_response_at).total_seconds() > Config.REFRESH_INTERVAL * 2
-            ):
+            )):
                 ok = await self.refresh_now()
                 if not ok and self.connected_channels:
                     await self.connected_channels[0].send("No info yet. Gathering data…")
                     return
+
+            if use_local and not local_data and not self._latest_response_data:
+                if self.connected_channels:
+                    await self.connected_channels[0].send("No local game info is available yet.")
+                return
 
             # Cache music tracks if needed
             if not hasattr(self, '_music_tracks'):
@@ -1715,19 +1872,36 @@ class DaggerfallBot(commands.Bot):
                 self._music_tracks = await self.load_json_async(music_data_path)
                 self._track_map = {track['TrackName']: track['TrackID'] for track in self._music_tracks}
 
-            response_data = self._latest_response_data
-
-            # === Rest of the existing method unchanged ===
+            response_data = self._latest_response_data or {}
             log = response_data.get('log') or {}
-            region_fk = log.get('region_fk') or {}
-            poi = log.get('poi') or {}
 
             # Basics
-            region = (log.get('region') or '').strip()
-            location = (log.get('location') or '').strip()
-            weather = (log.get('weather') or '').strip()
-            season = (log.get('season') or '').strip()
-            current_song = (log.get('current_song') or '').strip()
+            if local_data:
+                region = (local_data.get('region') or '').strip()
+                location = (local_data.get('location') or '').strip()
+                weather = (local_data.get('weather') or '').strip()
+                season = (local_data.get('season') or '').strip()
+                current_song = (local_data.get('currentSong') or '').strip()
+                date_str = (local_data.get('date') or '').strip()
+            else:
+                region = (log.get('region') or '').strip()
+                location = (log.get('location') or '').strip()
+                weather = (log.get('weather') or '').strip()
+                season = (log.get('season') or '').strip()
+                current_song = (log.get('current_song') or '').strip()
+                date_str = log.get('date', '') or ''
+
+            # Cached metadata is safe to reuse only when it describes the same
+            # region/location as the local snapshot.
+            same_region = self._normalized_location(region) == self._normalized_location(
+                log.get('region')
+            )
+            same_location = same_region and (
+                self._normalized_location(location)
+                == self._normalized_location(log.get('location'))
+            )
+            region_fk = (log.get('region_fk') or {}) if same_region else {}
+            poi = (log.get('poi') or {}) if same_location else {}
 
             # Ocean + "near" handling
             in_ocean = region.lower() == 'ocean'
@@ -1744,7 +1918,6 @@ class DaggerfallBot(commands.Bot):
             poi_emoji = poi.get('emoji') or ''
 
             # Time formatting (date like: "…, HH:MM:SS")
-            date_str = log.get('date', '') or ''
             date_val, time_12hr, time_hms = "", "", ""
             if date_str and ',' in date_str:
                 parts = [p.strip() for p in date_str.split(',')]
@@ -1801,15 +1974,13 @@ class DaggerfallBot(commands.Bot):
             else:
                 logging.info("Suppressed duplicate !info within debounce window")
 
-            # Update stream title when we have HH:MM:SS
+            # Keep the Bluesky record current. Twitch title updates run from the
+            # faster local-state loop and are independently throttled.
             if time_hms:
                 live_text = self.build_live_text(
                     region or "", weather or "", time_hms, date_str, last_known_name
                 )
                 self._update_state("bluesky_live_text", live_text)
-                await self.update_stream_title(
-                    region or "", weather or "", time_hms, date_str, last_known_name
-                )
 
         except Exception as e:
             logging.error(f"Info error: {e}")

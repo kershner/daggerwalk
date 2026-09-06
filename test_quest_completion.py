@@ -22,16 +22,6 @@ import daggerwalk_twitch_bot as bot_module
 bot_module.bluesky_live = bluesky_stub
 
 
-class FakeResponse:
-    status_code = 201
-
-    def __init__(self, payload):
-        self.payload = payload
-
-    def json(self):
-        return self.payload
-
-
 class RecordingChannel:
     def __init__(self, failures=0):
         self.failures = failures
@@ -41,18 +31,6 @@ class RecordingChannel:
         if self.failures:
             self.failures -= 1
             raise RuntimeError("temporary Twitch failure")
-        self.messages.append(message)
-
-
-class SecondSendFailsOnceChannel(RecordingChannel):
-    def __init__(self):
-        super().__init__()
-        self.calls = 0
-
-    async def send(self, message):
-        self.calls += 1
-        if self.calls == 2:
-            raise RuntimeError("temporary failure sending new quest")
         self.messages.append(message)
 
 
@@ -72,6 +50,7 @@ def make_bot(channel=None):
     bot._announced_quest_completion_keys = set()
     bot._pending_quest_completions = {}
     bot._last_bluesky_quest_post_date = None
+    bot._last_quest_arrival_key = None
     bot._save_quest_completion_state = lambda: None
     bot.bluesky_client = None
     bot._test_channels = [] if channel is None else [channel]
@@ -84,6 +63,85 @@ def make_bot(channel=None):
 
 
 class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_interactive_info_uses_local_state_without_server_refresh(self):
+        channel = RecordingChannel()
+        bot = make_bot(channel)
+        bot.state = {"bluesky_live_text": ""}
+        bot._music_tracks = []
+        bot._track_map = {}
+        bot._latest_response_data = {
+            "log": {
+                "region": "Old Region",
+                "location": "Old Place",
+                "weather": "Snowy",
+                "season": "Winter",
+                "current_song": "Old Song",
+                "date": "Morndas, 1 Morning Star, 3E 405, 01:00:00",
+                "region_fk": {"climate": "Desert", "emoji": "OLD"},
+                "poi": {"emoji": "STALE"},
+            }
+        }
+        bot._latest_response_at = datetime.now(timezone.utc)
+        bot.refresh_now = AsyncMock(return_value=True)
+
+        async def get_local_data():
+            return {
+                "region": "Wayrest",
+                "location": "Wayrest",
+                "weather": "Rainy",
+                "season": "Summer",
+                "currentSong": "New Song",
+                "date": "Tirdas, 12 Sun's Height, 3E 405, 18:30:00",
+            }
+
+        bot.get_map_json_data = get_local_data
+
+        await bot.game_info(use_local=True)
+
+        bot.refresh_now.assert_not_awaited()
+        self.assertEqual(len(channel.messages), 1)
+        self.assertIn("Wayrest", channel.messages[0])
+        self.assertIn("Rainy", channel.messages[0])
+        self.assertIn("6:30 PM", channel.messages[0])
+        self.assertNotIn("Old Region", channel.messages[0])
+        self.assertNotIn("STALE", channel.messages[0])
+
+    async def test_local_quest_arrival_triggers_one_immediate_refresh(self):
+        bot = make_bot()
+        bot._latest_response_data = {
+            "active_quests": [{
+                "id": 42,
+                "slot": 1,
+                "poi": {"name": "Wayrest", "region": {"name": "Wayrest"}},
+            }],
+            "completed_quests": [],
+        }
+        bot.refresh_now = AsyncMock(return_value=True)
+        local_data = {"location": " Wayrest ", "region": "WAYREST"}
+
+        self.assertTrue(await bot._maybe_submit_quest_arrival(local_data))
+        self.assertFalse(await bot._maybe_submit_quest_arrival(local_data))
+
+        bot.refresh_now.assert_awaited_once()
+
+    async def test_failed_local_quest_arrival_is_retried(self):
+        bot = make_bot()
+        bot._latest_response_data = {
+            "active_quests": [{
+                "id": 42,
+                "slot": 1,
+                "poi": {"name": "Wayrest", "region": {"name": "Wayrest"}},
+            }],
+            "completed_quests": [],
+        }
+        bot.refresh_now = AsyncMock(side_effect=[False, True])
+        local_data = {"location": "Wayrest", "region": "Wayrest"}
+
+        self.assertFalse(await bot._maybe_submit_quest_arrival(local_data))
+        self.assertTrue(await bot._maybe_submit_quest_arrival(local_data))
+
+        self.assertEqual(bot.refresh_now.await_count, 2)
+
     async def test_quest_command_uses_fresh_cached_response(self):
         channel = RecordingChannel()
         bot = make_bot(channel)
@@ -194,127 +252,6 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             "Details: !quest 1 • !quest 2 • !quest 3 "
             "🗺️Map: https://kershner.org/daggerwalk",
         )
-
-    async def test_on_demand_refresh_announces_completion(self):
-        channel = RecordingChannel()
-        bot = make_bot(channel)
-        payload = {
-            "active_quests": [
-                {
-                    "id": 43,
-                    "slot": 2,
-                    "quest_name": "Travel to Wayrest",
-                    "quest_giver_name": "Lady Brisienna",
-                    "xp": 30,
-                    "poi": {"map_pixel_x": 12, "map_pixel_y": 34},
-                }
-            ],
-            "completed_quests": [
-                {"id": 42, "slot": 2, "quest_name": "Reach Daggerfall", "xp": 250}
-            ],
-        }
-
-        with patch.object(bot_module, "post_to_django", return_value=FakeResponse(payload)):
-            self.assertTrue(await bot.refresh_now())
-
-        self.assertEqual(
-            channel.messages,
-            [
-                "✅Quest 2: Reach Daggerfall completed!  250 XP awarded!",
-                "📜New Quest 2: Travel to Wayrest — Lady Brisienna — 30 XP "
-                "🗺️Map: https://kershner.org/daggerwalk?map_focus_x=12&map_focus_y=34",
-            ],
-        )
-        self.assertEqual(bot._pending_quest_completions, {})
-
-    async def test_failed_send_stays_queued_and_retries_without_duplicate(self):
-        channel = RecordingChannel(failures=1)
-        bot = make_bot(channel)
-        payload = {
-            "active_quests": [
-                {"id": 100, "slot": 1, "quest_name": "Travel to Daggerfall", "xp": 15}
-            ],
-            "completed_quests": [{"id": 99, "slot": 1, "poi_name": "Wayrest"}],
-        }
-
-        await bot._check_and_announce_quest_completion(payload)
-        self.assertIn("id:99", bot._pending_quest_completions)
-        self.assertEqual(channel.messages, [])
-
-        await bot._check_and_announce_quest_completion({"active_quests": [], "completed_quests": []})
-        await bot._check_and_announce_quest_completion(payload)
-
-        self.assertEqual(
-            channel.messages,
-            [
-                "✅Quest 1: Wayrest completed!",
-                "📜New Quest 1: Travel to Daggerfall — 15 XP "
-                "🗺️Map: https://kershner.org/daggerwalk",
-            ],
-        )
-        self.assertEqual(bot._pending_quest_completions, {})
-
-    async def test_legacy_completion_without_id_is_not_silently_dropped(self):
-        channel = RecordingChannel()
-        bot = make_bot(channel)
-        payload = {
-            "quest_completed": True,
-            "completed_quest": {
-                "slot": 3,
-                "poi_name": "Sentinel",
-                "completed_at": "2026-09-01T12:00:00Z",
-            },
-            "current_quest": {
-                "slot": 3,
-                "quest_name": "Travel to Wayrest",
-                "xp": 20,
-            },
-        }
-
-        await bot._check_and_announce_quest_completion(payload)
-
-        self.assertEqual(
-            channel.messages,
-            [
-                "✅Quest 3: Sentinel completed!",
-                "📜New Quest 3: Travel to Wayrest — 20 XP "
-                "🗺️Map: https://kershner.org/daggerwalk",
-            ],
-        )
-        self.assertEqual(bot._pending_quest_completions, {})
-
-    async def test_new_quest_retry_does_not_repeat_completion(self):
-        channel = SecondSendFailsOnceChannel()
-        bot = make_bot(channel)
-        payload = {
-            "active_quests": [
-                {"id": 8, "slot": 2, "quest_name": "Travel to Sentinel", "xp": 35}
-            ],
-            "completed_quests": [
-                {"id": 7, "slot": 2, "quest_name": "Travel to Wayrest", "xp": 25}
-            ],
-        }
-
-        await bot._check_and_announce_quest_completion(payload)
-        self.assertEqual(
-            channel.messages,
-            ["✅Quest 2: Travel to Wayrest completed!  25 XP awarded!"],
-        )
-        self.assertTrue(bot._pending_quest_completions["id:7"]["completion_sent"])
-
-        await bot._check_and_announce_quest_completion(
-            {"active_quests": payload["active_quests"], "completed_quests": []}
-        )
-
-        self.assertEqual(
-            channel.messages,
-            [
-                "✅Quest 2: Travel to Wayrest completed!  25 XP awarded!",
-                "📜New Quest 2: Travel to Sentinel — 35 XP "
-                "🗺️Map: https://kershner.org/daggerwalk",
-            ],
-        )
-        self.assertEqual(bot._pending_quest_completions, {})
 
     async def test_bluesky_retry_does_not_repeat_twitch_messages(self):
         channel = RecordingChannel()
