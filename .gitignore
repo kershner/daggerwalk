@@ -7,5 +7,7 @@ list_music_tracks.json
 parameters.json
 quest_completion_state.json
 quest_completion_state.json.tmp
+daggerwalk_state.json
+daggerwalk_state.json.tmp
 __pycache__/
 *.log

@@ -80,7 +80,7 @@ class Config:
     )
     MORE_COMMANDS = (
         "info", "quest", "use", "weather", "levitate", "toggle_ai", "exit",
-        "gravity", "playvid", "modlist", "shotgun", "camera", "killall", "bighop",
+        "gravity", "playvid", "modlist", "shotgun", "camera", "torch", "killall", "bighop",
     )
     COMMAND_HELP = {
         "walk": "Start autowalk • Usage: !walk",
@@ -111,6 +111,7 @@ class Config:
         "modlist": "List the active Daggerfall Unity mods • Usage: !modlist",
         "shotgun": "Raise, fire, and lower the equipped shotgun • Usage: !shotgun",
         "camera": "Start a vote to toggle the third-person camera • Usage: !camera",
+        "torch": "Toggle the player torch light • Usage: !torch",
         "killall": "Kill all nearby enemies • Usage: !killall",
         "bighop": "Run the extended unstuck movement sequence • Usage: !bighop",
         "save": "Admin only: save the game • Usage: !save",
@@ -120,6 +121,7 @@ class Config:
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
     DJANGO_LOG_URL = "https://kershner.org/daggerwalk/log/"
     QUEST_COMPLETION_STATE_FILE = "quest_completion_state.json"
+    LOCAL_STATE_FILE = "daggerwalk_state.json"
 
     STREAM_TAGS = [
         "Retro",
@@ -434,6 +436,7 @@ class DaggerfallBot(commands.Bot):
             "levitate": "off",
             "ai_enabled": False,
             "camera_mode": "third",
+            "torch": self._load_torch_state(),
             "next_log_time": None,
             "bluesky_live_text": "",
         }
@@ -817,6 +820,28 @@ class DaggerfallBot(commands.Bot):
         except Exception as e:
             logging.error(f"Could not load quest completion state: {e}")
 
+    def _load_torch_state(self):
+        """Restore the persisted torch toggle."""
+        try:
+            with open(Config.LOCAL_STATE_FILE, "r", encoding="utf-8") as state_file:
+                saved_state = json.load(state_file)
+            return bool(saved_state.get("torch", False)) if isinstance(saved_state, dict) else False
+        except FileNotFoundError:
+            return False
+        except Exception as e:
+            logging.error(f"Could not load torch state: {e}")
+            return False
+
+    def _save_torch_state(self):
+        """Atomically persist the torch toggle."""
+        state_path = Config.LOCAL_STATE_FILE
+        try:
+            with open(f"{state_path}.tmp", "w", encoding="utf-8") as state_file:
+                json.dump({"torch": bool(self.state.get("torch", False))}, state_file)
+            os.replace(f"{state_path}.tmp", state_path)
+        except Exception as e:
+            logging.error(f"Could not save torch state: {e}")
+
     def _save_quest_completion_state(self):
         """Atomically persist quest announcement state."""
         state_path = Config.QUEST_COMPLETION_STATE_FILE
@@ -1065,6 +1090,7 @@ class DaggerfallBot(commands.Bot):
             "more": self.more_commands,
             "quest": lambda: self.quest(args),
             "state": self.show_state,
+            "torch": self.toggle_torch,
         }
 
         if command in command_map:
@@ -1342,6 +1368,18 @@ class DaggerfallBot(commands.Bot):
         current = self.state.get("camera_mode", "first")
         new_mode = "third" if current == "first" else "first"
         self._update_state("camera_mode", new_mode)
+
+    async def toggle_torch(self):
+        """Press BrightLight's toggle key and keep bot state synchronized."""
+        async with self._game_ui():
+            new_state = not bool(self.state.get("torch", False))
+            setting = "on" if new_state else "off"
+            await asyncio.to_thread(send_game_input, ";")
+            self._update_state("torch", new_state)
+            self._save_torch_state()
+
+        if self.connected_channels:
+            await self.connected_channels[0].send(f"Torch: {setting}")
 
     async def bighop(self):
         """Shortcut for common pattern to get unstuck"""
@@ -2065,6 +2103,8 @@ class DaggerfallBot(commands.Bot):
                 parts.append(f"AI: {ai_str}")
             if s.get("camera_mode"):
                 parts.append(f"Camera: {s['camera_mode']}")
+            torch_str = "on" if s.get("torch", False) else "off"
+            parts.append(f"Torch: {torch_str}")
             if s.get("next_log_time"):
                 est = pytz.timezone("US/Eastern")
                 t = s['next_log_time'].astimezone(est)

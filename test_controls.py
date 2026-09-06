@@ -1,5 +1,8 @@
 import asyncio
+import json
 import math
+import os
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -138,10 +141,10 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         bot._start_command_task = lambda name, factory: dispatched.append(name)
 
         with patch.object(bot_module.aiofiles, "open", return_value=AsyncFileStub()):
-            for command in ("!w", "!cursor", "!click", "!left_click", "!right_click", "!esc"):
+            for command in ("!w", "!cursor", "!click", "!torch", "!left_click", "!right_click", "!esc"):
                 await bot.event_message(Message(command, channel))
 
-        self.assertEqual(dispatched, ["walk", "cursor", "click"])
+        self.assertEqual(dispatched, ["walk", "cursor", "click", "torch"])
 
     async def test_movement_alias_preserves_parameters(self):
         bot = self.make_bot()
@@ -260,6 +263,61 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
 
         send_key.assert_called_once_with(bot_module.GameKeys.CURSOR.value)
         click.assert_called_once_with()
+
+
+class TorchCommandTests(unittest.IsolatedAsyncioTestCase):
+    def make_bot(self, channel=None):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._dev_channel = channel or RecordingChannel()
+        bot._ui_lock = asyncio.Lock()
+        bot._movement = Mock()
+        bot.state = {"torch": False}
+        bot._save_torch_state = Mock()
+        return bot
+
+    async def test_torch_toggles_game_command_state_and_feedback(self):
+        channel = RecordingChannel()
+        bot = self.make_bot(channel)
+
+        with patch.object(bot_module.asyncio, "to_thread", AsyncMock()) as to_thread:
+            await bot.toggle_torch()
+            await bot.toggle_torch()
+
+        self.assertEqual(
+            to_thread.call_args_list,
+            [
+                unittest.mock.call(bot_module.send_game_input, ";"),
+                unittest.mock.call(bot_module.send_game_input, ";"),
+            ],
+        )
+        self.assertFalse(bot.state["torch"])
+        self.assertEqual(channel.messages, ["Torch: on", "Torch: off"])
+        self.assertEqual(bot._save_torch_state.call_count, 2)
+
+    async def test_state_output_always_includes_torch(self):
+        channel = RecordingChannel()
+        bot = self.make_bot(channel)
+        bot.state["torch"] = True
+
+        await bot.show_state()
+
+        self.assertIn("Torch: on", channel.messages[0])
+
+    def test_torch_state_round_trips_through_local_state_file(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot.state = {"torch": True}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = os.path.join(temp_dir, "daggerwalk_state.json")
+            with patch.object(bot_module.Config, "LOCAL_STATE_FILE", state_path):
+                bot._save_torch_state()
+                loaded = bot._load_torch_state()
+
+            with open(state_path, "r", encoding="utf-8") as state_file:
+                on_disk = json.load(state_file)
+
+        self.assertTrue(loaded)
+        self.assertEqual(on_disk, {"torch": True})
 
 
 class HelpCommandTests(unittest.IsolatedAsyncioTestCase):
