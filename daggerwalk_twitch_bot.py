@@ -79,7 +79,7 @@ class Config:
     }
     HELP_COMMANDS = (
         "walk", "stop", "jump", "left", "right", "up", "down", "center",
-        "forward", "back", "cursor", "click", "map", "song", "state", "more",
+        "forward", "back", "cursor", "click", "doubleclick", "map", "song", "state", "more",
     )
     MORE_COMMANDS = (
         "info", "quest", "use", "weather", "levitate", "toggle_ai", "exit",
@@ -98,6 +98,7 @@ class Config:
         "back": "Hold backward by an optional amount from 1–100 (default 10) • Usage: !back [amount]",
         "cursor": "Toggle the in-game cursor by pressing Enter • Usage: !cursor",
         "click": "Click the left mouse button • Usage: !click",
+        "doubleclick": "Double-click the left mouse button • Usage: !doubleclick",
         "map": "Briefly show the world map • Usage: !map",
         "song": "Start a vote to change the music • Usage: !song <number|random|category>",
         "state": "Show the bot's current local settings • Usage: !state",
@@ -255,6 +256,12 @@ def left_click():
     ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
     time.sleep(0.1)
     ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+
+
+def double_click():
+    left_click()
+    time.sleep(0.1)
+    left_click()
 
 
 def set_movement_key(key: str, pressed: bool):
@@ -963,6 +970,7 @@ class DaggerfallBot(commands.Bot):
                     last_song = new_song_name
                     logging.info(f"Detected new song: {song_display}")
 
+                await self._maybe_turn_off_torch_at_morning(data)
                 await self._maybe_update_stream_title(data)
                 await self._maybe_submit_quest_arrival(data)
 
@@ -1158,6 +1166,7 @@ class DaggerfallBot(commands.Bot):
             "use": lambda: self.send_movement(GameKeys.USE),
             "cursor": self.toggle_cursor,
             "click": self.send_click,
+            "doubleclick": self.send_double_click,
             "map": self.toggle_map,
             "bighop": self.bighop,
             "shotgun": self.use_shotgun,
@@ -1238,6 +1247,11 @@ class DaggerfallBot(commands.Bot):
         async with self._game_ui():
             if await asyncio.to_thread(focus_game_window):
                 await asyncio.to_thread(left_click)
+
+    async def send_double_click(self):
+        async with self._game_ui():
+            if await asyncio.to_thread(focus_game_window):
+                await asyncio.to_thread(double_click)
 
     def validate_song_arg(self, args):
         """Validate song selection"""
@@ -1461,6 +1475,31 @@ class DaggerfallBot(commands.Bot):
 
         if self.connected_channels:
             await self.connected_channels[0].send(f"Torch: {setting}")
+
+    async def _maybe_turn_off_torch_at_morning(self, data):
+        """Turn off an enabled torch during the game's morning hours."""
+        if not self.state.get("torch", False):
+            return False
+
+        _, _, time_str, _, _ = self._local_live_fields(data)
+        try:
+            hour = datetime.strptime(time_str, "%H:%M:%S").hour
+        except ValueError:
+            return False
+
+        if not 6 <= hour < 12:
+            return False
+
+        async with self._game_ui():
+            # A chat command may have changed the torch while we waited for the UI.
+            if not self.state.get("torch", False):
+                return False
+            await asyncio.to_thread(send_game_input, ";")
+            self._update_state("torch", False)
+            self._save_torch_state()
+
+        logging.info("Torch automatically turned off for morning")
+        return True
 
     async def bighop(self):
         """Shortcut for common pattern to get unstuck"""

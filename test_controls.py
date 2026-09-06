@@ -141,10 +141,10 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         bot._start_command_task = lambda name, factory: dispatched.append(name)
 
         with patch.object(bot_module.aiofiles, "open", return_value=AsyncFileStub()):
-            for command in ("!w", "!cursor", "!click", "!torch", "!center", "!left_click", "!right_click", "!esc"):
+            for command in ("!w", "!cursor", "!click", "!doubleclick", "!torch", "!center", "!left_click", "!right_click", "!esc"):
                 await bot.event_message(Message(command, channel))
 
-        self.assertEqual(dispatched, ["walk", "cursor", "click", "torch", "center"])
+        self.assertEqual(dispatched, ["walk", "cursor", "click", "doubleclick", "torch", "center"])
 
     async def test_movement_alias_preserves_parameters(self):
         bot = self.make_bot()
@@ -248,7 +248,7 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
             ["Autowalk started.", "All movement stopped."],
         )
 
-    async def test_cursor_and_click_send_expected_input(self):
+    async def test_cursor_click_and_doubleclick_send_expected_input(self):
         bot = object.__new__(bot_module.DaggerfallBot)
         bot._ui_lock = asyncio.Lock()
         bot._movement = Mock()
@@ -257,12 +257,15 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
             patch.object(bot_module, "send_game_input") as send_key,
             patch.object(bot_module, "focus_game_window", return_value=True),
             patch.object(bot_module, "left_click") as click,
+            patch.object(bot_module, "double_click") as doubleclick,
         ):
             await bot.toggle_cursor()
             await bot.send_click()
+            await bot.send_double_click()
 
         send_key.assert_called_once_with(bot_module.GameKeys.CURSOR.value)
         click.assert_called_once_with()
+        doubleclick.assert_called_once_with()
 
     async def test_center_sends_home_key(self):
         bot = object.__new__(bot_module.DaggerfallBot)
@@ -315,6 +318,32 @@ class TorchCommandTests(unittest.IsolatedAsyncioTestCase):
         await bot.show_state()
 
         self.assertIn("Torch: on", channel.messages[0])
+
+    async def test_torch_turns_off_automatically_during_morning(self):
+        bot = self.make_bot()
+        bot.state["torch"] = True
+        data = {"date": "Tirdas, 12 Sun's Height, 3E 405, 06:00:00"}
+
+        with patch.object(bot_module.asyncio, "to_thread", AsyncMock()) as to_thread:
+            changed = await bot._maybe_turn_off_torch_at_morning(data)
+
+        self.assertTrue(changed)
+        self.assertFalse(bot.state["torch"])
+        to_thread.assert_awaited_once_with(bot_module.send_game_input, ";")
+        bot._save_torch_state.assert_called_once_with()
+
+    async def test_torch_stays_on_before_morning(self):
+        bot = self.make_bot()
+        bot.state["torch"] = True
+        data = {"date": "Tirdas, 12 Sun's Height, 3E 405, 05:59:59"}
+
+        with patch.object(bot_module.asyncio, "to_thread", AsyncMock()) as to_thread:
+            changed = await bot._maybe_turn_off_torch_at_morning(data)
+
+        self.assertFalse(changed)
+        self.assertTrue(bot.state["torch"])
+        to_thread.assert_not_awaited()
+        bot._save_torch_state.assert_not_called()
 
     def test_torch_state_round_trips_through_local_state_file(self):
         bot = object.__new__(bot_module.DaggerfallBot)
