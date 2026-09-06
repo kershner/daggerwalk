@@ -1,14 +1,14 @@
 import asyncio
-import os
 import threading
+from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from daggerwalk_twitch_bot import Config, DaggerfallBot
+from .twitch_bot import Config, DaggerfallBot
 
 
 app = Flask(__name__)
-STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = Path(__file__).resolve().parent
 
 _messages = []
 _messages_lock = threading.Lock()
@@ -51,7 +51,7 @@ def _run_loop():
 
 @app.route("/")
 def index():
-    return send_from_directory(STATIC_DIR, "templates/dev_control.html")
+    return send_from_directory(STATIC_DIR / "templates", "dev_control.html")
 
 
 @app.route("/cmd/<path:raw>")

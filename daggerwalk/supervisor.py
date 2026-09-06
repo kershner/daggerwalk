@@ -6,12 +6,13 @@ import os
 import argparse
 import pyautogui
 import pygetwindow as gw
-from pathlib import Path
+
+from .paths import LOG_FILE, READY_FLAG, REPO_ROOT, ensure_runtime_dir
 
 # Configure logging
-LOG_FILE = "daggerwalk.log"
+ensure_runtime_dir()
 logging.basicConfig(
-    filename=LOG_FILE,
+    filename=str(LOG_FILE),
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
@@ -34,9 +35,6 @@ SOUNDVOLUMEVIEW_PATH = first_existing_path(
     r"C:\Daggerwalk\SoundVolumeView\SoundVolumeView.exe",            # local dev
 )
 
-# === Readiness flag ===
-READY_FLAG = Path(r"C:\Daggerwalk\runtime\dfu_ready.flag")
-
 # Function to check if a process is running
 def is_process_running(process_name):
     for proc in psutil.process_iter(["name"]):
@@ -45,17 +43,6 @@ def is_process_running(process_name):
     return False
 
 # Function to terminate a process by name
-def terminate_process(process_name):
-    for proc in psutil.process_iter(["name"]):
-        if process_name.lower() in (proc.info["name"] or "").lower():
-            logging.info(f"Terminating {process_name} (PID: {proc.pid})...")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except psutil.TimeoutExpired:
-                logging.warning(f"Force killing {process_name}...")
-                proc.kill()
-
 def start_daggerfall():
     """
     Launches Daggerfall Unity and performs initial setup.
@@ -240,19 +227,19 @@ def ensure_dfu_ready(timeout=240):
     return ok
 
 def run_control_supervised(control_mode):
-    base = os.path.dirname(__file__)
+    base = str(REPO_ROOT)
     pyw = os.path.join(base, "daggerwalk_venv", "Scripts", "pythonw.exe")
     pye = os.path.join(base, "daggerwalk_venv", "Scripts", "python.exe")
 
     if control_mode == "dev":
         exe = pye
-        command = [exe, os.path.join(base, "dev_server.py")]
+        command = [exe, "-m", "daggerwalk.dev_server"]
         label = "dev server"
         flags = 0
     else:
         # Prefer pythonw.exe for the production bot to avoid a second console.
         exe = pyw if os.path.exists(pyw) else pye
-        command = [exe, os.path.join(base, "daggerwalk_twitch_bot.py")]
+        command = [exe, "-m", "daggerwalk.twitch_bot"]
         label = "Twitch bot"
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if exe == pye else 0
 

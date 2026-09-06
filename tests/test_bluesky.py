@@ -9,17 +9,17 @@ atproto_stub = types.ModuleType("atproto")
 atproto_stub.Client = object
 sys.modules.setdefault("atproto", atproto_stub)
 
-import bluesky_live
+from daggerwalk import bluesky
 
 
 class QuestCompletionPostTests(unittest.TestCase):
     def test_new_tid_is_a_valid_feed_post_record_key(self):
-        rkey = bluesky_live.new_tid()
+        rkey = bluesky.new_tid()
 
         self.assertRegex(rkey, re.compile(r"^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$"))
 
     def test_post_text_and_portrait_alt_match_requested_format(self):
-        text, alt = bluesky_live.build_quest_completion_post({
+        text, alt = bluesky.build_quest_completion_post({
             "id": 42,
             "quest_name": "Travel to Wayrest",
             "quest_giver_name": "Lady Brisienna",
@@ -45,7 +45,7 @@ class QuestCompletionPostTests(unittest.TestCase):
         )
 
     def test_missing_optional_fields_produces_text_only_fallback(self):
-        text, alt = bluesky_live.build_quest_completion_post({
+        text, alt = bluesky.build_quest_completion_post({
             "poi_name": "Wayrest",
         })
 
@@ -57,7 +57,7 @@ class QuestCompletionPostTests(unittest.TestCase):
         self.assertEqual(alt, "")
 
     def test_one_participant_uses_singular_walker(self):
-        text, _ = bluesky_live.build_quest_completion_post({
+        text, _ = bluesky.build_quest_completion_post({
             "quest_name": "Travel to Wayrest",
             "xp": 30,
             "participant_count": 1,
@@ -85,8 +85,8 @@ class QuestCompletionPostTests(unittest.TestCase):
             "participant_count": 3,
         }
 
-        with patch.object(bluesky_live.requests, "get", return_value=response):
-            bluesky_live.post_quest_completion(client, quest, "3jzfcijpj2z2a")
+        with patch.object(bluesky.requests, "get", return_value=response):
+            bluesky.post_quest_completion(client, quest, "3jzfcijpj2z2a")
 
         put_data = repo.put_record.call_args.kwargs["data"]
         record = put_data["record"]

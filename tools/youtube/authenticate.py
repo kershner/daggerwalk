@@ -1,6 +1,5 @@
 # youtube_auth.py
 from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 import pickle, os
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]

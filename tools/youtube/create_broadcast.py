@@ -1,9 +1,7 @@
 # youtube_create_broadcast.py
-import pickle, os
+import pickle
 from datetime import datetime, timedelta, timezone
 from googleapiclient.discovery import build
-
-SCOPES = ["https://www.googleapis.com/auth/youtube.force-ssl"]
 
 CATEGORY_ID = "20"  # 20 = Gaming
 GAME_TITLE = "The Elder Scrolls II: Daggerfall"

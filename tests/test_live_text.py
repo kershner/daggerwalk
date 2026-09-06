@@ -4,13 +4,13 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 
-bluesky_stub = types.ModuleType("bluesky_live")
+bluesky_stub = types.ModuleType("daggerwalk.bluesky")
 bluesky_stub.login = lambda *args: None
 bluesky_stub.clear_live = lambda *args: None
 bluesky_stub.ensure_live = lambda *args: None
-sys.modules.setdefault("bluesky_live", bluesky_stub)
+sys.modules.setdefault("daggerwalk.bluesky", bluesky_stub)
 
-import daggerwalk_twitch_bot as bot_module
+from daggerwalk import twitch_bot as bot_module
 
 
 class LiveTextTests(unittest.TestCase):

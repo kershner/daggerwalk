@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-import daggerwalk_twitch_bot as bot_module
+from daggerwalk import twitch_bot as bot_module
 
 
 class AsyncFileStub:

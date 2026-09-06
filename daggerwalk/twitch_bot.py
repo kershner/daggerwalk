@@ -18,11 +18,21 @@ import ctypes
 import math
 from contextlib import asynccontextmanager
 
+from .paths import (
+    CHAT_COMMANDS_FILE,
+    LOCAL_STATE_FILE,
+    LOG_FILE,
+    MUSIC_TRACKS_FILE,
+    PARAMETERS_FILE,
+    QUEST_COMPLETION_STATE_FILE,
+    ensure_runtime_dir,
+)
 
+ensure_runtime_dir()
 logging.basicConfig(
     level=logging.INFO, 
     format="%(asctime)s - %(levelname)s - %(message)s",
-    filename="daggerwalk.log",
+    filename=str(LOG_FILE),
     filemode="a"  # Append mode
 )
 
@@ -49,7 +59,7 @@ class GameKeys(Enum):
 
 class Config:
     """Bot configuration settings"""
-    PARAMS_FILE = "parameters.json"
+    PARAMS_FILE = str(PARAMETERS_FILE)
     TWITCH_CHANNEL = "daggerwalk"
     BOT_USERNAME = "daggerwalk_bot"
     REFRESH_INTERVAL = 300  # 5 minutes
@@ -125,8 +135,8 @@ class Config:
     }
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
     DJANGO_LOG_URL = "https://kershner.org/daggerwalk/log/"
-    QUEST_COMPLETION_STATE_FILE = "quest_completion_state.json"
-    LOCAL_STATE_FILE = "daggerwalk_state.json"
+    QUEST_COMPLETION_STATE_FILE = str(QUEST_COMPLETION_STATE_FILE)
+    LOCAL_STATE_FILE = str(LOCAL_STATE_FILE)
 
     STREAM_TAGS = [
         "Retro",
@@ -369,7 +379,7 @@ def post_to_django(data, reset=False):
         }
 
         # Read chat command logs and include in payload
-        log_file = "chat_commands_log.txt"
+        log_file = str(CHAT_COMMANDS_FILE)
         if os.path.exists(log_file):
             with open(log_file, "r") as f:
                 payload["chat_logs"] = f.read().strip().splitlines()
@@ -496,7 +506,7 @@ class DaggerfallBot(commands.Bot):
     def _init_bluesky(self):
         try:
             global bluesky_live
-            import bluesky_live
+            from . import bluesky as bluesky_live
 
             handle, password = Config.get_bluesky_credentials()
             self.bluesky_client = bluesky_live.login(handle, password)
@@ -953,7 +963,7 @@ class DaggerfallBot(commands.Bot):
 
         # Ensure track map is loaded
         if not hasattr(self, "_track_map"):
-            music_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "list_music_tracks.json")
+            music_data_path = str(MUSIC_TRACKS_FILE)
             self._music_tracks = await self.load_json_async(music_data_path)
             self._track_map = {track["TrackName"]: track["TrackID"] for track in self._music_tracks}
 
@@ -1106,7 +1116,7 @@ class DaggerfallBot(commands.Bot):
         timestamp = datetime.now(timezone.utc).isoformat()
         entry = f"{timestamp} | {username} | {command} | {' '.join(args)}\n"
         try:
-            async with aiofiles.open("chat_commands_log.txt", mode="a") as f:
+            async with aiofiles.open(CHAT_COMMANDS_FILE, mode="a") as f:
                 await f.write(entry)
         except Exception as e:
             logging.error(f"Failed to log chat command: {e}")
@@ -1131,7 +1141,7 @@ class DaggerfallBot(commands.Bot):
             try:
                 ts = datetime.now(timezone.utc).isoformat()
                 logline = f"{ts} | {message.author.name} | {command} | {' '.join(args)}\n"
-                async with aiofiles.open("chat_commands_log.txt", mode="a") as f:
+                async with aiofiles.open(CHAT_COMMANDS_FILE, mode="a") as f:
                     await f.write(logline)
             except Exception as e:
                 logging.error(f"Failed to log chat command: {e}")
@@ -1907,7 +1917,7 @@ class DaggerfallBot(commands.Bot):
 
             # Cache music tracks if needed
             if not hasattr(self, '_music_tracks'):
-                music_data_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'list_music_tracks.json')
+                music_data_path = str(MUSIC_TRACKS_FILE)
                 self._music_tracks = await self.load_json_async(music_data_path)
                 self._track_map = {track['TrackName']: track['TrackID'] for track in self._music_tracks}
 

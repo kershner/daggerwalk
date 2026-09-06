@@ -14,9 +14,10 @@ if %ERRORLEVEL% == 0 (
 :: Always use python.exe (NOT pythonw.exe) so console output is visible
 set "PYTHON_EXECUTABLE=%SCRIPT_DIR%daggerwalk_venv\Scripts\python.exe"
 
-:: Launch the supervisor script
+:: Launch the supervisor module
 echo Starting DaggerWalk supervisor...
-"%PYTHON_EXECUTABLE%" "%SCRIPT_DIR%start_daggerwalk.py" %*
+cd /d "%SCRIPT_DIR%"
+"%PYTHON_EXECUTABLE%" -m daggerwalk.supervisor %*
 
 echo.
 echo ================================================

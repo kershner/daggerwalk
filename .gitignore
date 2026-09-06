@@ -1,13 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
 daggerwalk_venv/
-VB-Cable/vbaudio_cable64_win7.sys
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Credentials and local configuration
+parameters.json
+token.pickle
+daggerwalk_youtube_client_secret.json
+.env
+.env.*
+!.env.example
+
+# Generated data and runtime state
+data/*.json
+!data/.gitkeep
+runtime/*
+!runtime/.gitkeep
+
+# Third-party Windows utilities
 VB-Cable/
 SoundVolumeView/
 Daggerfall Imaging 2/
+SoundVolumeView.zip
+Utilities/
+DaggerfallUnity/
+
+# C# and Visual Studio build output
+.vs/
+bin/
+obj/
+*.csproj.user
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.bak
+*.tmp
+
+# Legacy root-level runtime files
+chat_commands_log.txt
 list_music_tracks.json
-parameters.json
+music_tracks.json
 quest_completion_state.json
-quest_completion_state.json.tmp
 daggerwalk_state.json
-daggerwalk_state.json.tmp
-__pycache__/
 *.log

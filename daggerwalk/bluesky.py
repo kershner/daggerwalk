@@ -1,4 +1,4 @@
-# bluesky_live.py
+"""Bluesky live-status and quest-completion publishing helpers."""
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from atproto import Client
