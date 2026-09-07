@@ -26,8 +26,14 @@ PARAMETERS_FILE = REPO_ROOT / "parameters.json"
 MUSIC_TRACKS_FILE = _local_file(DATA_DIR, "list_music_tracks.json")
 LOG_FILE = _local_file(RUNTIME_DIR, "daggerwalk.log")
 CHAT_COMMANDS_FILE = _local_file(RUNTIME_DIR, "chat_commands_log.txt")
+DEV_CHAT_COMMANDS_FILE = _local_file(RUNTIME_DIR, "dev_chat_commands_log.txt")
 LOCAL_STATE_FILE = _local_file(RUNTIME_DIR, "daggerwalk_state.json")
 QUEST_COMPLETION_STATE_FILE = _local_file(RUNTIME_DIR, "quest_completion_state.json")
+DEV_QUEST_COMPLETION_STATE_FILE = _local_file(
+    RUNTIME_DIR, "dev_quest_completion_state.json"
+)
+PROGRESSION_CACHE_FILE = _local_file(RUNTIME_DIR, "progression_cache.json")
+DEV_PROGRESSION_CACHE_FILE = _local_file(RUNTIME_DIR, "dev_progression_cache.json")
 READY_FLAG = RUNTIME_DIR / "dfu_ready.flag"
 
 

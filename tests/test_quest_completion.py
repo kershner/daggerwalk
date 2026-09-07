@@ -223,7 +223,7 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
         bot.game_info.assert_not_awaited()
         self.assertFalse(bot._state_ready.is_set())
 
-    async def test_quest_summary_uses_bullets_and_lists_detail_commands(self):
+    async def test_quest_summary_uses_one_compact_detail_command(self):
         bot = make_bot()
         summary = bot._format_quest_summary([
             {
@@ -247,8 +247,8 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             summary,
             "🧭 3 active quests: [1] ⚓Zagizar, Mournoth • 25 XP • "
             "[2] 🏹Nozim Orchard, Sentinel • 45 XP • "
-            "[3] 🗿The Greenton Plantation, Ykalon • 50 XP "
-            "Details: !quest 1 • !quest 2 • !quest 3 "
+            "[3] 🗿The Greenton Plantation, Ykalon • 50 XP • "
+            "Details: !quest [num] • "
             "🗺️Map: https://kershner.org/daggerwalk",
         )
 

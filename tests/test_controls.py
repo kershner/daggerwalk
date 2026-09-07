@@ -160,16 +160,18 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(name, "left")
         bot.send_movement.assert_awaited_once_with(bot_module.GameKeys.LEFT, ["25"])
 
-    async def test_dev_commands_do_not_enter_the_upload_log(self):
+    async def test_dev_qualifying_commands_enter_the_local_upload_log(self):
         bot = self.make_bot()
         bot._dev_mode = True
         bot._start_command_task = lambda name, factory: None
         channel = RecordingChannel()
 
-        with patch.object(bot_module.aiofiles, "open") as open_log:
-            await bot.event_message(Message("!help", channel))
+        with patch.object(
+            bot_module.aiofiles, "open", return_value=AsyncFileStub()
+        ) as open_log:
+            await bot.event_message(Message("!walk", channel))
 
-        open_log.assert_not_called()
+        open_log.assert_called_once_with(bot_module.Config.CHAT_COMMANDS_FILE, mode="a")
 
 
 class ConcurrentCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -194,7 +196,38 @@ class ConcurrentCommandTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DevModeTests(unittest.IsolatedAsyncioTestCase):
-    async def test_dev_runtime_is_ready_without_starting_server_refreshes(self):
+    def test_local_configuration_routes_every_django_endpoint_to_loopback(self):
+        config = bot_module.Config
+        with (
+            patch.dict(os.environ, {"DAGGERWALK_DEV_SERVER": "http://localhost:8123"}),
+            patch.multiple(
+                config,
+                DJANGO_BASE_API_URL="production", DJANGO_LOG_URL="production",
+                DJANGO_PROGRESSION_URL="production", DJANGO_GUILD_URL="production",
+                DJANGO_MONUMENT_URL="production", CHAT_COMMANDS_FILE="production",
+                DAGGERWALK_WEB_URL="production",
+                QUEST_COMPLETION_STATE_FILE="production", PROGRESSION_CACHE_FILE="production",
+            ),
+        ):
+            config.use_local_django_server()
+
+            for url in (
+                config.DJANGO_BASE_API_URL,
+                config.DJANGO_LOG_URL,
+                config.DJANGO_PROGRESSION_URL,
+                config.DJANGO_GUILD_URL,
+                config.DJANGO_MONUMENT_URL,
+            ):
+                self.assertTrue(url.startswith("http://localhost:8123/"), url)
+
+    def test_local_configuration_rejects_non_loopback_servers(self):
+        with patch.dict(
+            os.environ, {"DAGGERWALK_DEV_SERVER": "https://kershner.org"}
+        ):
+            with self.assertRaisesRegex(ValueError, "loopback URL"):
+                bot_module.Config.use_local_django_server()
+
+    async def test_dev_runtime_starts_the_production_refresh_loop(self):
         bot = object.__new__(bot_module.DaggerfallBot)
         bot._dev_mode = True
         bot._startup_tasks_started = False
@@ -213,20 +246,29 @@ class DevModeTests(unittest.IsolatedAsyncioTestCase):
         await bot._start_runtime()
         await asyncio.sleep(0)
 
-        self.assertTrue(bot._state_ready.is_set())
-        bot.data_refresh_loop.assert_not_called()
+        bot.data_refresh_loop.assert_awaited_once()
 
-    async def test_dev_refresh_never_reads_or_posts_server_data(self):
+    async def test_dev_refresh_posts_game_data_through_the_normal_pipeline(self):
         bot = object.__new__(bot_module.DaggerfallBot)
         bot._dev_mode = True
-        bot.get_map_json_data = AsyncMock()
+        bot._refresh_lock = asyncio.Lock()
+        bot._recent_world_positions = []
+        bot.get_map_json_data = AsyncMock(return_value={"worldX": 1})
+        bot._update_progression_cache = Mock()
+        bot._check_and_announce_quest_completion = AsyncMock()
+        response = Mock(status_code=201)
+        response.json.return_value = {
+            "progression": {"walkers": {}},
+            "command_state": {},
+            "log": {"world_x": 10, "world_z": 20},
+        }
 
-        with patch.object(bot_module, "post_to_django") as post:
+        with patch.object(bot_module, "post_to_django", return_value=response) as post:
             result = await bot.refresh_now()
 
-        self.assertFalse(result)
-        bot.get_map_json_data.assert_not_called()
-        post.assert_not_called()
+        self.assertTrue(result)
+        bot.get_map_json_data.assert_awaited_once()
+        post.assert_called_once_with({"worldX": 1})
 
 
 class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):

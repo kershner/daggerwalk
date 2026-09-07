@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 from pathlib import Path
 
@@ -17,7 +18,7 @@ _bot = None
 
 
 class DevAuthor:
-    name = Config.TWITCH_CHANNEL
+    name = os.environ.get("DAGGERWALK_DEV_USER", Config.TWITCH_CHANNEL)
 
 
 class DevChannel:
