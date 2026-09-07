@@ -55,6 +55,9 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
         get.assert_not_called()
         post.assert_not_called()
 
+    def test_hail_is_a_renown_alias(self):
+        self.assertEqual(bot_module.Config.COMMAND_ALIASES["hail"], "renown")
+
     async def test_guild_join_only_creates_local_confirmation(self):
         bot, channel = make_bot(), Channel()
         with patch("daggerwalk.twitch_bot.requests.post") as post:

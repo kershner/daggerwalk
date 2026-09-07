@@ -91,6 +91,7 @@ class Config:
         "u": "up",
         "d": "down",
         "j": "jump",
+        "hail": "renown",
     }
     HELP_COMMANDS = (
         "walk", "stop", "jump", "left", "right", "up", "down", "center",

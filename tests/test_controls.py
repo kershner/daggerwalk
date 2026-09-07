@@ -418,6 +418,10 @@ class HelpCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(" • Usage: !left [amount]", channel.messages[0])
         self.assertIn(" • Aliases: !l", channel.messages[0])
 
+        await self.make_bot(channel).help(["hail"])
+        self.assertIn("!renown: Show walker progression", channel.messages[1])
+        self.assertIn(" • Aliases: !hail", channel.messages[1])
+
     async def test_help_lists_commands_and_detail_syntax(self):
         channel = RecordingChannel()
         bot = self.make_bot(channel)
