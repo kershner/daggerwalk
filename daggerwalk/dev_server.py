@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import threading
 from pathlib import Path
@@ -9,6 +10,7 @@ from .twitch_bot import Config, DaggerfallBot
 
 
 app = Flask(__name__)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
 STATIC_DIR = Path(__file__).resolve().parent
 
 _messages = []

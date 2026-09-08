@@ -9,6 +9,7 @@ import aiofiles
 import requests
 import random
 import logging
+from logging.handlers import RotatingFileHandler
 import aiohttp
 import asyncio
 import pytz
@@ -39,8 +40,12 @@ ensure_runtime_dir()
 logging.basicConfig(
     level=logging.INFO, 
     format="%(asctime)s - %(levelname)s - %(message)s",
-    filename=str(LOG_FILE),
-    filemode="a"  # Append mode
+    handlers=[RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )],
 )
 
 
@@ -104,7 +109,7 @@ class Config:
         "forward", "back", "cursor", "click", "doubleclick", "map", "song", "state", "more",
     )
     MORE_COMMANDS = (
-        "info", "quest", "use", "weather", "levitate", "exit",
+        "info", "quest", "use", "weather", "levitate", "toggle_ai", "exit",
         "gravity", "playvid", "modlist", "shotgun", "camera", "torch", "killall", "bighop",
         "renown", "guild", "monument",
     )
@@ -135,6 +140,7 @@ class Config:
         "use": "Use or activate the targeted object • Usage: !use",
         "weather": "Start a vote to change the weather • Usage: !weather <type>",
         "levitate": "Start a vote to toggle levitation • Usage: !levitate <on|off>",
+        "toggle_ai": "Start a vote to toggle enemy AI • Usage: !toggle_ai",
         "exit": "Start a vote to teleport outside the current building • Usage: !exit",
         "gravity": "Start a vote to set gravity from 0–20 • Usage: !gravity <0-20>",
         "playvid": "Start a vote to play a video numbered 0–15 • Usage: !playvid <0-15>",
@@ -171,7 +177,7 @@ class Config:
     QUALIFYING_COMMANDS = {
         "walk", "stop", "jump", "left", "right", "up", "down", "center",
         "forward", "back", "cursor", "click", "doubleclick", "map", "song",
-        "use", "weather", "levitate", "exit", "gravity", "playvid",
+        "use", "weather", "levitate", "toggle_ai", "exit", "gravity", "playvid",
         "shotgun", "camera", "torch", "killall", "bighop",
     }
 
@@ -493,6 +499,7 @@ class DaggerfallBot(commands.Bot):
         self._latest_response_data = None
         self._latest_response_at = None
         self._recent_world_positions = []
+        self._last_position_snapshot_time = None
         self._stuck_anchor_position = None
         self._last_world_movement_at = None
         self._autowalk_active = True
@@ -531,6 +538,7 @@ class DaggerfallBot(commands.Bot):
             "song_category": "all",
             "gravity": 20,
             "levitate": "off",
+            "ai_enabled": False,
             "camera_mode": "third",
             "torch": self._load_torch_state(),
             "next_log_time": None,
@@ -541,6 +549,7 @@ class DaggerfallBot(commands.Bot):
             "song": "change the background music",
             "weather": "change the weather",
             "levitate": "start or stop levitating",
+            "toggle_ai": "toggle enemy AI",
             "exit": "teleport out of the current building",
             "gravity": "set gravity level",
             "playvid": "play an in-game video",
@@ -1088,8 +1097,8 @@ class DaggerfallBot(commands.Bot):
         while True:
             try:
                 data = await self.get_map_json_data()
-                self._record_local_world_position(data)
-                await self.check_if_bot_is_stuck()
+                if self._record_local_world_position(data):
+                    await self.check_if_bot_is_stuck()
             except Exception as e:
                 logging.error(f"stuck_check_loop error: {e}")
 
@@ -1902,6 +1911,8 @@ class DaggerfallBot(commands.Bot):
             args = self.current_vote_message.content.split()[1:]
             levitate_choice = args[0] if args else "off"
             await self.levitate(levitate_choice)
+        elif self.current_vote_type == "toggle_ai":
+            await self.toggle_enemy_ai()
         elif self.current_vote_type == "exit":
             await self.exit_building()
         elif self.current_vote_type == "gravity":
@@ -2091,6 +2102,18 @@ class DaggerfallBot(commands.Bot):
         channel = self.connected_channels[0]
         await channel.send(f'Levitate set to: {levitate_choice}!')
         self._update_state("levitate", levitate_choice.lower())
+
+    async def toggle_enemy_ai(self):
+        """Toggle enemy AI on/off."""
+        logging.info("Executing toggle_enemy_ai command")
+        await self.send_console_command("tai")
+        await asyncio.sleep(5)
+
+        if self.connected_channels:
+            await self.connected_channels[0].send("Toggled enemy AI!")
+        self._update_state(
+            "ai_enabled", not self.state.get("ai_enabled", True)
+        )
 
     async def exit_building(self):
         """Teleport outside building/dungeon or do nothing"""
@@ -2535,6 +2558,14 @@ class DaggerfallBot(commands.Bot):
             logging.warning("Local position unavailable; skipping stuck sample")
             return False
 
+        snapshot_time = str(data.get("realTimeUtc") or "").strip()
+        if snapshot_time and snapshot_time == getattr(
+            self, "_last_position_snapshot_time", None
+        ):
+            return False
+        if snapshot_time:
+            self._last_position_snapshot_time = snapshot_time
+
         sampled_at = time.monotonic() if sampled_at is None else sampled_at
         self._recent_world_positions.append(position)
         self._recent_world_positions = self._recent_world_positions[-2:]
@@ -2553,37 +2584,34 @@ class DaggerfallBot(commands.Bot):
         return True
 
     async def check_if_bot_is_stuck(self):
-        logging.info("Starting stuck check...")
-        
         # Allow a full inactivity window after startup before intervening.
         uptime = time.monotonic() - self._bot_started_at_monotonic
         if uptime < Config.STUCK_INACTIVITY_SECONDS:
-            logging.info(f"Skipping stuck check - bot uptime only {uptime:.1f}s")
+            logging.debug("Skipping stuck check - bot uptime only %.1fs", uptime)
             return
 
         est = pytz.timezone("US/Eastern")
         now = datetime.now(est).time()
-        logging.info(f"Current time EST: {now}")
 
         # Skip the first 10 minutes after midnight and 9 AM Eastern (handles DST automatically)
         if ((now.hour == 0 and now.minute < 10) or
             (now.hour == 9 and now.minute < 10)):
-            logging.info(f"Skipping stuck check - in quiet hours (hour={now.hour}, minute={now.minute})")
+            logging.debug("Skipping stuck check during quiet hours")
             return
         
         try:
             if not getattr(self, "_autowalk_active", True):
-                logging.info("Autowalk was intentionally stopped; skipping stuck check")
+                logging.debug("Autowalk stopped; skipping stuck check")
                 return
 
             last_movement_at = getattr(self, "_last_world_movement_at", None)
             if last_movement_at is None or getattr(self, "_stuck_anchor_position", None) is None:
-                logging.info("No local position sample available for stuck check")
+                logging.debug("No local position sample available for stuck check")
                 return
 
             inactive_for = time.monotonic() - last_movement_at
             if inactive_for < Config.STUCK_INACTIVITY_SECONDS:
-                logging.info("Movement inactivity %.1fs; not stuck yet", inactive_for)
+                logging.debug("Movement inactivity %.1fs; not stuck yet", inactive_for)
                 return
 
             if not self.connected_channels:
@@ -2821,6 +2849,8 @@ class DaggerfallBot(commands.Bot):
                 parts.append(f"Gravity: {s['gravity']}")
             if s.get("levitate"):
                 parts.append(f"Levitate: {s['levitate']}")
+            if s.get("ai_enabled") is not None:
+                parts.append(f"AI: {'on' if s['ai_enabled'] else 'off'}")
             if s.get("camera_mode"):
                 parts.append(f"Camera: {s['camera_mode']}")
             torch_str = "on" if s.get("torch", False) else "off"

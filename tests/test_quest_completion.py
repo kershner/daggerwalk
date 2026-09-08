@@ -45,6 +45,7 @@ def make_bot(channel=None):
     bot._latest_response_data = None
     bot._latest_response_at = None
     bot._recent_world_positions = []
+    bot._last_position_snapshot_time = None
     bot._stuck_anchor_position = None
     bot._last_world_movement_at = None
     bot._autowalk_active = True
@@ -172,6 +173,21 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
         bot._record_local_world_position({"worldX": 111, "worldZ": 200}, 50)
         self.assertEqual(bot._last_world_movement_at, 50)
         self.assertEqual(bot._stuck_anchor_position, (111.0, 200.0))
+
+    def test_repeated_map_snapshot_is_not_treated_as_a_new_stuck_sample(self):
+        bot = make_bot()
+        first = {"worldX": 100, "worldZ": 200, "realTimeUtc": "2026-09-07 21:00:00 UTC"}
+        repeated = {"worldX": 100, "worldZ": 200, "realTimeUtc": "2026-09-07 21:00:00 UTC"}
+        next_snapshot = {
+            "worldX": 111,
+            "worldZ": 200,
+            "realTimeUtc": "2026-09-07 21:01:00 UTC",
+        }
+
+        self.assertTrue(bot._record_local_world_position(first, 10))
+        self.assertFalse(bot._record_local_world_position(repeated, 40))
+        self.assertTrue(bot._record_local_world_position(next_snapshot, 70))
+        self.assertEqual(bot._last_world_movement_at, 70)
 
     async def test_stuck_check_recovers_after_thirty_seconds_without_server_call(self):
         channel = RecordingChannel()

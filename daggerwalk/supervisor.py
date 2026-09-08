@@ -2,19 +2,25 @@ import subprocess
 import time
 import psutil
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import argparse
 import pyautogui
 import pygetwindow as gw
 
-from .paths import LOG_FILE, READY_FLAG, REPO_ROOT, ensure_runtime_dir
+from .paths import READY_FLAG, REPO_ROOT, SUPERVISOR_LOG_FILE, ensure_runtime_dir
 
 # Configure logging
 ensure_runtime_dir()
 logging.basicConfig(
-    filename=str(LOG_FILE),
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[RotatingFileHandler(
+        SUPERVISOR_LOG_FILE,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )],
 )
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
@@ -110,8 +116,8 @@ def start_daggerfall(control_mode="twitch"):
         pyautogui.press("enter")
         time.sleep(1)
 
-        logging.info("Enabling no-target mode...")
-        pyautogui.write("nt")
+        logging.info("Toggling AI...")
+        pyautogui.write("tai")
         time.sleep(1)
         pyautogui.press("enter")
         time.sleep(1)

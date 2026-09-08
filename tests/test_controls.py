@@ -361,6 +361,37 @@ class LifecyclePresenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("shutting down in 9 minutes", channel.messages[0])
 
 
+class AiCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_toggle_ai_uses_tai_and_updates_state(self):
+        channel = RecordingChannel()
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._dev_channel = channel
+        bot.state = {"ai_enabled": False}
+        bot.send_console_command = AsyncMock()
+
+        with patch.object(bot_module.asyncio, "sleep", AsyncMock()):
+            await bot.toggle_enemy_ai()
+
+        bot.send_console_command.assert_awaited_once_with("tai")
+        self.assertTrue(bot.state["ai_enabled"])
+        self.assertEqual(channel.messages, ["Toggled enemy AI!"])
+
+    async def test_toggle_ai_vote_dispatches_to_game_command(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot.current_vote_type = "toggle_ai"
+        bot.toggle_enemy_ai = AsyncMock()
+
+        with patch.object(bot_module.asyncio, "sleep", AsyncMock()):
+            await bot.execute_voted_command()
+
+        bot.toggle_enemy_ai.assert_awaited_once_with()
+
+    def test_toggle_ai_is_listed_and_qualifying(self):
+        self.assertIn("toggle_ai", bot_module.Config.MORE_COMMANDS)
+        self.assertIn("toggle_ai", bot_module.Config.COMMAND_HELP)
+        self.assertIn("toggle_ai", bot_module.Config.QUALIFYING_COMMANDS)
+
+
 class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_walk_and_stop_send_feedback(self):
         bot = object.__new__(bot_module.DaggerfallBot)

@@ -25,6 +25,7 @@ def _local_file(directory: Path, filename: str) -> Path:
 PARAMETERS_FILE = REPO_ROOT / "parameters.json"
 MUSIC_TRACKS_FILE = _local_file(DATA_DIR, "list_music_tracks.json")
 LOG_FILE = _local_file(RUNTIME_DIR, "daggerwalk.log")
+SUPERVISOR_LOG_FILE = _local_file(RUNTIME_DIR, "supervisor.log")
 CHAT_COMMANDS_FILE = _local_file(RUNTIME_DIR, "chat_commands_log.txt")
 DEV_CHAT_COMMANDS_FILE = _local_file(RUNTIME_DIR, "dev_chat_commands_log.txt")
 LOCAL_STATE_FILE = _local_file(RUNTIME_DIR, "daggerwalk_state.json")
