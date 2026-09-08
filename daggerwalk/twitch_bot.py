@@ -103,7 +103,7 @@ class Config:
         "forward", "back", "cursor", "click", "doubleclick", "map", "song", "state", "more",
     )
     MORE_COMMANDS = (
-        "info", "quest", "use", "weather", "levitate", "toggle_ai", "exit",
+        "info", "quest", "use", "weather", "levitate", "exit",
         "gravity", "playvid", "modlist", "shotgun", "camera", "torch", "killall", "bighop",
         "renown", "guild", "monument",
     )
@@ -134,7 +134,6 @@ class Config:
         "use": "Use or activate the targeted object • Usage: !use",
         "weather": "Start a vote to change the weather • Usage: !weather <type>",
         "levitate": "Start a vote to toggle levitation • Usage: !levitate <on|off>",
-        "toggle_ai": "Start a vote to toggle enemy AI • Usage: !toggle_ai",
         "exit": "Start a vote to teleport outside the current building • Usage: !exit",
         "gravity": "Start a vote to set gravity from 0–20 • Usage: !gravity <0-20>",
         "playvid": "Start a vote to play a video numbered 0–15 • Usage: !playvid <0-15>",
@@ -167,7 +166,7 @@ class Config:
     QUALIFYING_COMMANDS = {
         "walk", "stop", "jump", "left", "right", "up", "down", "center",
         "forward", "back", "cursor", "click", "doubleclick", "map", "song",
-        "use", "weather", "levitate", "toggle_ai", "exit", "gravity", "playvid",
+        "use", "weather", "levitate", "exit", "gravity", "playvid",
         "shotgun", "camera", "torch", "killall", "bighop",
     }
 
@@ -525,7 +524,6 @@ class DaggerfallBot(commands.Bot):
             "song_category": "all",
             "gravity": 20,
             "levitate": "off",
-            "ai_enabled": False,
             "camera_mode": "third",
             "torch": self._load_torch_state(),
             "next_log_time": None,
@@ -536,7 +534,6 @@ class DaggerfallBot(commands.Bot):
             "song": "change the background music",
             "weather": "change the weather",
             "levitate": "start or stop levitating",
-            "toggle_ai": "toggle enemy AI",
             "exit": "teleport out of the current building",
             "gravity": "set gravity level",
             "playvid": "play an in-game video",
@@ -1866,8 +1863,6 @@ class DaggerfallBot(commands.Bot):
             args = self.current_vote_message.content.split()[1:]
             levitate_choice = args[0] if args else "off"
             await self.levitate(levitate_choice)
-        elif self.current_vote_type == "toggle_ai":
-            await self.toggle_enemy_ai()
         elif self.current_vote_type == "exit":
             await self.exit_building()
         elif self.current_vote_type == "gravity":
@@ -2036,19 +2031,6 @@ class DaggerfallBot(commands.Bot):
         channel = self.connected_channels[0]
         await channel.send(f'Levitate set to: {levitate_choice}!')
         self._update_state("levitate", levitate_choice.lower())
-
-    async def toggle_enemy_ai(self):
-        """Toggle enemy AI on/off"""
-        logging.info("Executing toggle_enemy_ai command")
-
-        await self.send_console_command("tai")
-
-        await asyncio.sleep(5)
-        
-        channel = self.connected_channels[0]
-        await channel.send("Toggled enemy AI!")
-        current = self.state.get("ai_enabled", True)
-        self._update_state("ai_enabled", not current)
 
     async def exit_building(self):
         """Teleport outside building/dungeon or do nothing"""
@@ -2771,9 +2753,6 @@ class DaggerfallBot(commands.Bot):
                 parts.append(f"Gravity: {s['gravity']}")
             if s.get("levitate"):
                 parts.append(f"Levitate: {s['levitate']}")
-            if s.get("ai_enabled") is not None:
-                ai_str = "on" if s['ai_enabled'] else "off"
-                parts.append(f"AI: {ai_str}")
             if s.get("camera_mode"):
                 parts.append(f"Camera: {s['camera_mode']}")
             torch_str = "on" if s.get("torch", False) else "off"

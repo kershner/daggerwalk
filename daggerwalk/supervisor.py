@@ -110,8 +110,8 @@ def start_daggerfall(control_mode="twitch"):
         pyautogui.press("enter")
         time.sleep(1)
 
-        logging.info("Toggling AI...")
-        pyautogui.write("tai")
+        logging.info("Enabling no-target mode...")
+        pyautogui.write("nt")
         time.sleep(1)
         pyautogui.press("enter")
         time.sleep(1)
