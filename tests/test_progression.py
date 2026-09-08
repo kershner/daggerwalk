@@ -23,6 +23,7 @@ class Message:
 def make_bot():
     bot = object.__new__(bot_module.DaggerfallBot)
     bot._pending_progression_actions = {}
+    bot._monument_type_samples = {}
     bot._read_rate_limits = {}
     bot._progression = {
         "profiles": {"walker": {
@@ -71,10 +72,11 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
 
         await bot.guild(Message(channel), ["join"])
 
-        self.assertIn("Only quests completed after joining earn XP and ranks", channel.messages[0])
-        self.assertIn("Fighters Guild: !guild join fighters", channel.messages[0])
-        self.assertIn("Dark Brotherhood: !guild join dark-brotherhood", channel.messages[0])
-        self.assertIn("progress is saved", channel.messages[0])
+        self.assertIn("Choose a guild", channel.messages[0])
+        self.assertIn("⚔️ fighters", channel.messages[0])
+        self.assertIn("🗡️ dark-brotherhood", channel.messages[0])
+        self.assertIn("Usage: !guild join <guild>", channel.messages[0])
+        self.assertEqual(channel.messages[0].count("!guild join"), 1)
         self.assertNotIn("walker", bot._pending_progression_actions)
 
     async def test_guild_followup_is_not_silently_blocked_by_status_cooldown(self):
@@ -84,18 +86,15 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
         await bot.guild(Message(channel), ["join"])
 
         self.assertEqual(len(channel.messages), 2)
-        self.assertIn("choose one guild to join", channel.messages[1])
+        self.assertIn("Choose a guild", channel.messages[1])
 
-    async def test_unaffiliated_guild_status_uses_display_names_and_emojis(self):
+    async def test_unaffiliated_guild_status_points_to_join_without_relisting_guilds(self):
         bot, channel = make_bot(), Channel()
 
         await bot.guild(Message(channel), [])
 
-        self.assertIn("is unaffiliated", channel.messages[0])
-        self.assertIn("future quest XP will raise its rank", channel.messages[0])
-        self.assertIn("⚔️ Fighters Guild • 🔮 Mages Guild", channel.messages[0])
-        self.assertIn("🗡️ Dark Brotherhood", channel.messages[0])
-        self.assertNotIn("dark-brotherhood", channel.messages[0])
+        self.assertIn("Unaffiliated • Join: !guild join", channel.messages[0])
+        self.assertNotIn("Fighters Guild", channel.messages[0])
         self.assertIn("https://kershner.org/daggerwalk/guilds/", channel.messages[0])
 
     async def test_monument_status_links_to_registry(self):
@@ -103,41 +102,81 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
 
         await bot.monument(Message(channel), [])
 
-        self.assertIn("1) !monument types", channel.messages[0])
-        self.assertIn("2) stand the Walker", channel.messages[0])
-        self.assertIn("3) !monument confirm", channel.messages[0])
+        self.assertIn("!monument types → !monument <type>", channel.messages[0])
+        self.assertIn("1 Monument Token", channel.messages[0])
         self.assertIn("https://kershner.org/daggerwalk/monuments/", channel.messages[0])
 
-    async def test_monument_types_explains_title_unlocks_and_placement(self):
+    async def test_monument_types_shows_three_random_choices_per_unlocked_tier(self):
         bot, channel = make_bot(), Channel()
+        bot._progression["profiles"]["walker"]["xp"] = 1500
+        bot._progression["monument_types"] = {
+            **{
+                f"path-{index}": {"label": f"Path {index}", "emoji": "🏛️", "required_title": "Pathfinder", "required_xp": 200}
+                for index in range(5)
+            },
+            **{
+                f"hero-{index}": {"label": f"Hero {index}", "emoji": "🏛️", "required_title": "Hero of the Iliac Bay", "required_xp": 1000}
+                for index in range(4)
+            },
+        }
 
-        await bot.monument(Message(channel), ["types"])
-        await bot.monument(Message(channel), ["types", "pathfinder"])
+        with patch("daggerwalk.twitch_bot.random.sample", side_effect=lambda names, count: names[:count]):
+            await bot.monument(Message(channel), ["types"])
 
-        self.assertIn("Choose the type of monument you want to place", channel.messages[0])
-        self.assertIn("These Renown tiers are available to you", channel.messages[0])
-        self.assertIn("Pathfinder: !monument types pathfinder", channel.messages[0])
-        self.assertNotIn("!monument types hero", channel.messages[0])
-        self.assertIn("These Pathfinder monument types are available to you", channel.messages[1])
-        self.assertIn("!monument place <type>", channel.messages[1])
+        self.assertIn("Pathfinder: path-0 • path-1 • path-2", channel.messages[0])
+        self.assertIn("Hero of the Iliac Bay: hero-0 • hero-1 • hero-2", channel.messages[0])
+        self.assertIn("path-2 │ Hero of the Iliac Bay", channel.messages[0])
+        self.assertNotIn("path-3", channel.messages[0])
+        self.assertIn("!monument types more", channel.messages[0])
+        self.assertIn("!monument <type>", channel.messages[0])
 
-    async def test_locked_monument_tier_explains_requirement_without_showing_types(self):
+        await bot.monument(Message(channel), ["types", "more"])
+
+        self.assertIn("Pathfinder: path-3 • path-4", channel.messages[1])
+        self.assertIn("Hero of the Iliac Bay: hero-3", channel.messages[1])
+        self.assertNotIn("path-0", channel.messages[1])
+
+    async def test_long_monument_type_lists_are_split_for_twitch(self):
+        bot, channel = make_bot(), Channel()
+        bot._progression["monument_types"] = {
+            f"monument-type-{index}": {
+                "label": f"Monument Type {index}", "emoji": "🏛️",
+                "required_title": "Pathfinder", "required_xp": 200,
+            }
+            for index in range(40)
+        }
+
+        with patch("daggerwalk.twitch_bot.random.sample", side_effect=lambda names, count: names[:count]):
+            await bot.monument(Message(channel), ["types"])
+        await bot.monument(Message(channel), ["types", "more"])
+
+        self.assertGreater(len(channel.messages), 1)
+        self.assertTrue(all(len(text) <= 500 for text in channel.messages))
+        self.assertIn("monument-type-0", " ".join(channel.messages))
+        self.assertIn("monument-type-39", " ".join(channel.messages))
+
+    async def test_monument_types_only_accepts_more_as_a_second_level(self):
         bot, channel = make_bot(), Channel()
 
         await bot.monument(Message(channel), ["types", "hero"])
 
-        self.assertIn("locked until you reach Hero of the Iliac Bay Renown", channel.messages[0])
-        self.assertIn("current title is Pathfinder", channel.messages[0])
-        self.assertIn("no locked types are shown", channel.messages[0])
+        self.assertIn("Usage: !monument types [more]", channel.messages[0])
         self.assertNotIn("obelisk", channel.messages[0])
 
-    async def test_monument_place_without_type_explains_exact_next_steps(self):
+    async def test_monument_place_subcommand_is_not_supported(self):
         bot, channel = make_bot(), Channel()
 
-        await bot.monument(Message(channel), ["place"])
+        await bot.monument(Message(channel), ["place", "cairn"])
 
-        self.assertIn("!monument types <pathfinder|hero|legend>", channel.messages[0])
-        self.assertIn("!monument place <type>", channel.messages[0])
+        self.assertIn("!monument types", channel.messages[0])
+        self.assertNotIn("walker", bot._pending_progression_actions)
+
+    async def test_monument_status_subcommand_is_not_supported(self):
+        bot, channel = make_bot(), Channel()
+
+        await bot.monument(Message(channel), ["status"])
+
+        self.assertIn("Unknown monument type", channel.messages[0])
 
     async def test_guild_join_reports_active_cooldown_before_creating_confirmation(self):
         bot, channel = make_bot(), Channel()
@@ -147,7 +186,7 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
 
         await bot.guild(Message(channel), ["join", "mages"])
 
-        self.assertIn("still on cooldown for another 3d 2h", channel.messages[0])
+        self.assertIn("on cooldown for another 3d 2h", channel.messages[0])
         self.assertIn("until", channel.messages[0])
         self.assertNotIn("walker", bot._pending_progression_actions)
 
@@ -156,9 +195,8 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
 
         await bot.guild(Message(channel), ["join", "mages"])
 
-        self.assertIn("preview: join the Mages Guild", channel.messages[0])
-        self.assertIn("Future quest XP will raise that guild's rank", channel.messages[0])
-        self.assertIn("30-day allegiance cooldown", channel.messages[0])
+        self.assertIn("Join the Mages Guild?", channel.messages[0])
+        self.assertIn("30-day cooldown", channel.messages[0])
         self.assertIn("!guild confirm • !guild cancel", channel.messages[0])
 
     async def test_guild_leave_preview_explains_retained_progress(self):
@@ -169,9 +207,9 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
 
         await bot.guild(Message(channel), ["leave"])
 
-        self.assertIn("preview: leave your current guild", channel.messages[0])
-        self.assertIn("saved guild rank remains", channel.messages[0])
-        self.assertIn("future quests earn no guild XP", channel.messages[0])
+        self.assertIn("Leave the Mages Guild?", channel.messages[0])
+        self.assertIn("rank stays saved", channel.messages[0])
+        self.assertIn("no guild XP accrues", channel.messages[0])
 
     async def test_guild_leave_while_unaffiliated_explains_what_to_do(self):
         bot, channel = make_bot(), Channel()
@@ -181,7 +219,7 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("already unaffiliated", channel.messages[0])
         self.assertIn("!guild join", channel.messages[0])
 
-    async def test_monument_place_freezes_local_location_without_server_call(self):
+    async def test_monument_preview_freezes_local_location_without_server_call(self):
         bot, channel = make_bot(), Channel()
 
         async def state():
@@ -189,11 +227,23 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
 
         bot.get_map_json_data = state
         with patch("daggerwalk.twitch_bot.requests.post") as post:
-            await bot.monument(Message(channel), ["place", "cairn"])
+            await bot.monument(Message(channel), ["cairn"])
         pending = bot._pending_progression_actions["walker"]
         self.assertEqual(pending["state"]["worldX"], "100000")
         self.assertIn("capturedAt", pending["state"])
         post.assert_not_called()
+
+    async def test_monument_type_can_be_placed_without_place_subcommand(self):
+        bot, channel = make_bot(), Channel()
+
+        async def state():
+            return {"worldX": "100000", "worldZ": "200000", "mapPixelX": "10", "mapPixelY": "20", "region": "Daggerfall", "locationType": "Wilderness", "date": "1 Frostfall"}
+
+        bot.get_map_json_data = state
+        await bot.monument(Message(channel), ["cairn"])
+
+        self.assertEqual(bot._pending_progression_actions["walker"]["monument_type"], "cairn")
+        self.assertIn("!monument confirm", channel.messages[0])
 
     async def test_monument_confirmation_includes_description_and_direct_map_link(self):
         bot, channel = make_bot(), Channel()

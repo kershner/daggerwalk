@@ -7,6 +7,7 @@ import pywinauto
 import pyautogui
 import aiofiles
 import requests
+import random
 import logging
 import aiohttp
 import asyncio
@@ -124,8 +125,8 @@ class Config:
         "info": "Show current journey and character information • Usage: !info",
         "quest": "Show active quests or one quest slot • Usage: !quest [1-3]",
         "renown": "Show walker progression • Usage: !renown [username]",
-        "guild": "Show your guild, rank, and guild XP. Complete a quest to unlock guilds. !guild join lists the four choices; !guild join <guild> previews joining; !guild leave previews leaving; !guild confirm applies the change and starts the allegiance cooldown; !guild cancel aborts it. Only XP earned from quests completed while you belong to a guild raises its rank, and saved guild progress is retained if you leave.",
-        "monument": "Show your token balance and placement steps. !monument types shows only the Renown tiers available to you; !monument types <pathfinder|hero|legend> lists that tier's exact choices only if you qualify. !monument place <type> previews a permanent map location where the Walker stands; !monument confirm spends 1 token and creates it, while !monument cancel aborts. !monument also links to the Registry.",
+        "guild": "Show your guild, rank, and guild XP. Guild changes require confirmation and start a 30-day cooldown; progress is saved. • Usage: !guild [join [guild]|leave|confirm|cancel]",
+        "monument": "Show your Monument Tokens and next token. Placements cost 1 token and are permanent. • Usage: !monument [types [more]|<type>|confirm|cancel]",
         "use": "Use or activate the targeted object • Usage: !use",
         "weather": "Start a vote to change the weather • Usage: !weather <type>",
         "levitate": "Start a vote to toggle levitation • Usage: !levitate <on|off>",
@@ -141,7 +142,7 @@ class Config:
         "bighop": "Run the extended unstuck movement sequence • Usage: !bighop",
         "save": "Admin only: save the game • Usage: !save",
         "load": "Admin only: load the latest save • Usage: !load",
-        "exec": "Admin only: run a game-console command • Usage: !exec <command>",
+        "exec": "Admin only: run a game-console command • Usage: !exec <command> [args]",
     }
     DJANGO_BASE_API_URL = "https://kershner.org/api/daggerwalk"
     DJANGO_LOG_URL = "https://kershner.org/daggerwalk/log/"
@@ -157,6 +158,7 @@ class Config:
     READ_USER_COOLDOWN = 30
     READ_GLOBAL_COOLDOWN = 5
     STATUS_USER_COOLDOWN = 15
+    SCHEDULED_MESSAGE_INTERVAL = 20 * 60
     GUILD_COOLDOWN_DAYS = 30
     QUALIFYING_COMMANDS = {
         "walk", "stop", "jump", "left", "right", "up", "down", "center",
@@ -486,8 +488,9 @@ class DaggerfallBot(commands.Bot):
         self._latest_command_state = None
         self._progression = self._load_progression_cache()
         self._pending_progression_actions = {}
+        self._monument_type_samples = {}
         self._read_rate_limits = {}
-        self._scheduled_help_count = 0
+        self._scheduled_message_index = 0
         self._last_stream_title = None
         self._last_stream_title_update_at = 0.0
         self._twitch_title_retry_at = 0.0
@@ -636,47 +639,39 @@ class DaggerfallBot(commands.Bot):
             yield
 
     async def message_scheduler(self):
-        """Schedule periodic help (20m) and quest (25m) messages."""
+        """Post help immediately, then rotate informational messages every 20 minutes."""
         logging.info("Starting message scheduler")
 
-        # Wait until we have first successful refresh so we don't announce early/empty
+        # Help needs no game data, so it can announce as soon as the bot starts.
+        try:
+            await self._scheduled_message()
+        except Exception as e:
+            logging.error(f"periodic message error: {e}")
+
+        # Later slots use game data, so wait for the first successful refresh.
         await self._state_ready.wait()
 
-        HELP_INTERVAL = 1200     # 20 minutes
-        QUEST_INTERVAL = 1500    # 25 minutes
+        while True:
+            await asyncio.sleep(Config.SCHEDULED_MESSAGE_INTERVAL)
+            try:
+                await self._scheduled_message()
+            except Exception as e:
+                logging.error(f"periodic message error: {e}")
 
-        HELP_OFFSET = 360        # 6 minutes after start
-        QUEST_OFFSET = 120       # 2 minutes after start (staggered to avoid overlaps)
+    async def _scheduled_message(self):
+        """Cycle through help, journey info, quests, and progression discovery."""
+        messages = (self.help, self.game_info, self.quest, self._scheduled_progression)
+        message_coro = messages[self._scheduled_message_index % len(messages)]
+        self._scheduled_message_index += 1
+        await message_coro()
 
-        async def run_periodic_message(message_coro, interval, initial_delay=0):
-            if initial_delay > 0:
-                await asyncio.sleep(initial_delay)
-            while True:
-                try:
-                    await message_coro()
-                except Exception as e:
-                    logging.error(f"periodic message error: {e}")
-                await asyncio.sleep(interval)
-
-        help_task = asyncio.create_task(
-            run_periodic_message(self._scheduled_help, HELP_INTERVAL, initial_delay=HELP_OFFSET)
-        )
-        quest_task = asyncio.create_task(
-            run_periodic_message(self.quest, QUEST_INTERVAL, initial_delay=QUEST_OFFSET)
-        )
-
-        await asyncio.gather(help_task, quest_task)
-
-    async def _scheduled_help(self):
-        """Rotate progression discovery into the existing help slot once an hour."""
-        self._scheduled_help_count += 1
-        if self._scheduled_help_count % 3 == 0:
-            if self.connected_channels:
-                await self.connected_channels[0].send(
-                    "📜 Complete a quest with any qualifying game command to earn XP, climb Renown, join a guild, and eventually raise permanent monuments. Try !renown • !guild • !monument"
-                )
-            return
-        await self.help()
+    async def _scheduled_progression(self):
+        """Explain the Renown system and point viewers to its commands."""
+        if self.connected_channels:
+            await self.connected_channels[0].send(
+                "📜 Complete quests by using chat commands.  Earn XP, gain renown, join a guild, and raise "
+                "permanent monuments. Try !renown • !guild • !monument"
+            )
 
     async def set_stream_tags(self):
         """Set Twitch stream tags"""
@@ -1337,45 +1332,40 @@ class DaggerfallBot(commands.Bot):
         profile = self._cached_profile(username)
         if not profile:
             await message.channel.send(
-                f"@{username}, complete any quest first to unlock guild membership. Then use !guild join to see all four choices. "
-                f"Guild Hall: {Config.DAGGERWALK_WEB_URL}/guilds/"
+                f"@{username} — Guilds unlock after your first quest • Join: !guild join "
+                f"• Guild Hall: {Config.DAGGERWALK_WEB_URL}/guilds/"
             )
             return
         if action == "status":
             guild = profile.get("guild")
             text = (
-                f"serves the {guild['emoji']} {guild['name']} as {guild['title']} "
-                f"({guild['xp']} guild XP). Quest XP earned while serving raises this guild rank. "
-                "Use !guild join to change guilds or !guild leave to become unaffiliated."
+                f"{guild['emoji']} {guild['name']} • {guild['title']} • {guild['xp']} guild XP "
+                "• Change: !guild join • Leave: !guild leave"
                 if guild else
-                f"is unaffiliated. Join one guild and future quest XP will raise its rank: "
-                f"{self._guild_choices_text()}. Use !guild join for the exact commands."
+                "Unaffiliated • Join: !guild join"
             )
             await message.channel.send(
-                f"@{username} {text} Guild Hall: {Config.DAGGERWALK_WEB_URL}/guilds/"
+                f"@{username} — {text} • Guild Hall: {Config.DAGGERWALK_WEB_URL}/guilds/"
             )
             return
         if action in {"join", "leave"}:
             cooldown = self._guild_cooldown_text(profile)
             if cooldown:
                 await message.channel.send(
-                    f"@{username}, your guild allegiance is still on cooldown {cooldown}. "
-                    "You cannot join, change, or leave a guild until it ends."
+                    f"@{username} — Guild changes are on cooldown {cooldown}."
                 )
                 return
         if action == "join":
             guilds = self._progression.get("guilds") or {}
             if len(args) != 2 or args[1].casefold() not in guilds:
                 await message.channel.send(
-                    f"@{username}, choose one guild to join. Only quests completed after joining earn XP and ranks for it: "
-                    f"{self._guild_choices_text(include_commands=True) or 'none are currently available'}. "
-                    "Your progress is saved if you later leave."
+                    f"@{username} — Choose a guild: {self._guild_choices_text() or 'none available'} "
+                    "• Usage: !guild join <guild>"
                 )
                 return
             if (profile.get("guild") or {}).get("key") == args[1].casefold():
                 await message.channel.send(
-                    f"@{username}, you already serve the {guilds[args[1].casefold()]['name']}. "
-                    "Use !guild for your current rank and guild XP."
+                    f"@{username} — You already serve the {guilds[args[1].casefold()]['name']} • Status: !guild"
                 )
                 return
         if action == "leave":
@@ -1384,32 +1374,26 @@ class DaggerfallBot(commands.Bot):
                     f"@{username}, you are already unaffiliated. Use !guild join to see the four guild choices."
                 )
                 return
-            target, wording = "", "leave your current guild"
+            target = ""
+            wording = f"Leave the {profile['guild']['name']}? Your rank stays saved; no guild XP accrues while unaffiliated."
         elif action == "join":
             target = args[1].casefold()
-            wording = f"join the {self._progression['guilds'][target]['name']}"
+            wording = f"Join the {self._progression['guilds'][target]['name']}?"
         else:
             await message.channel.send(
-                "Unknown guild command. Use !guild for your status • !guild join for choices • "
-                "!guild join <guild> or !guild leave to preview a change • !guild confirm to apply it • !guild cancel to abort."
+                "Unknown guild command • Usage: !guild [join [guild]|leave|confirm|cancel]"
             )
             return
         self._pending_progression_actions[username.casefold()] = {"kind": "guild", "guild": target, "expires": time.monotonic() + Config.CONFIRMATION_SECONDS}
-        consequence = (
-            "Future quest XP will raise that guild's rank."
-            if target else
-            "Your saved guild rank remains, but future quests earn no guild XP while unaffiliated."
-        )
         await message.channel.send(
-            f"@{username}, preview: {wording}. {consequence} Confirming starts the "
-            f"{Config.GUILD_COOLDOWN_DAYS}-day allegiance cooldown. Within {Config.CONFIRMATION_SECONDS}s: "
+            f"@{username} — {wording} Starts a {Config.GUILD_COOLDOWN_DAYS}-day cooldown • "
+            f"Confirm within {Config.CONFIRMATION_SECONDS}s: "
             "!guild confirm • !guild cancel"
         )
 
-    def _guild_choices_text(self, include_commands=False):
+    def _guild_choices_text(self):
         return " • ".join(
-            f"{guild['emoji']} {guild['name']}"
-            + (f": !guild join {key}" if include_commands else "")
+            f"{guild['emoji']} {key}"
             for key, guild in (self._progression.get("guilds") or {}).items()
         )
 
@@ -1436,75 +1420,36 @@ class DaggerfallBot(commands.Bot):
 
     async def monument(self, message, args):
         username = message.author.name
-        action = args[0].casefold() if args else "status"
+        action = args[0].casefold() if args else ""
         if await self._handle_pending_progression_action(message, action, "monument", "monument placement"):
             return
-        if action == "status" and not self._read_allowed("monument", username, Config.STATUS_USER_COOLDOWN):
+        if not args and not self._read_allowed("monument", username, Config.STATUS_USER_COOLDOWN):
             return
         profile = self._cached_profile(username)
         if not profile:
             await message.channel.send(
-                f"@{username}, complete a quest first to unlock Renown and begin earning Monument Tokens. "
-                f"A token lets you create one permanent map location where the Walker stands. Registry: {Config.DAGGERWALK_WEB_URL}/monuments/"
+                f"@{username} — Monuments unlock after your first quest. Each token creates one permanent map location "
+                f"where the Walker stands • Registry: {Config.DAGGERWALK_WEB_URL}/monuments/"
             )
             return
+        monument_types = self._progression.get("monument_types") or {}
         if action == "types":
-            monument_types = self._progression.get("monument_types") or {}
-            category = args[1].casefold() if len(args) > 1 else ""
-            if not category:
-                categories = {
-                    "pathfinder": "Pathfinder",
-                    "hero": "Hero of the Iliac Bay",
-                    "legend": "Living Legend",
-                }
-                available = []
-                for key, title in categories.items():
-                    required_xp = next(
-                        (item["required_xp"] for item in monument_types.values() if item["required_title"] == title),
-                        None,
-                    )
-                    if required_xp is not None and profile["xp"] >= required_xp:
-                        available.append(f"{title}: !monument types {key}")
-                await message.channel.send(
-                    f"🏛️ Choose the type of monument you want to place. These Renown tiers are available to you: "
-                    f"{' • '.join(available) if available else 'none yet; monument types begin at Pathfinder'}. "
-                    "Higher Renown titles unlock additional types, which stay hidden until you qualify."
-                )
+            if len(args) == 1:
+                await self._send_monument_types(message, profile, monument_types)
                 return
-            title = {"pathfinder": "Pathfinder", "hero": "Hero of the Iliac Bay", "legend": "Living Legend"}.get(category)
-            if not title:
-                await message.channel.send("Unknown title group. Use !monument types <pathfinder|hero|legend>.")
+            if len(args) == 2 and args[1].casefold() == "more":
+                await self._send_monument_types(message, profile, monument_types, more=True)
                 return
-            names = [key for key, item in monument_types.items() if item["required_title"] == title]
-            required_xp = next((item["required_xp"] for item in monument_types.values() if item["required_title"] == title), None)
-            if required_xp is None:
-                await message.channel.send(f"No {title} monument types are currently configured.")
-                return
-            if profile["xp"] < required_xp:
-                await message.channel.send(
-                    f"@{username}, {title} monument types are locked until you reach {title} Renown. "
-                    f"Your current title is {profile['renown_title']}; no locked types are shown."
-                )
-                return
-            await message.channel.send(
-                f"🏛️ These {title} monument types are available to you: {', '.join(names)}. "
-                "Choose one exactly as shown: !monument place <type>."
-            )
+            await message.channel.send("Usage: !monument types [more]")
             return
-        if action == "place":
-            if len(args) != 2:
-                await message.channel.send(
-                    "Choose one exact type first with !monument types <pathfinder|hero|legend>, "
-                    "then use !monument place <type>."
-                )
-                return
-            monument_type = args[1].casefold()
-            type_data = (self._progression.get("monument_types") or {}).get(monument_type)
+        if action in monument_types and len(args) == 1:
+            monument_type = action
+        else:
+            monument_type = ""
+        if monument_type:
+            type_data = monument_types.get(monument_type)
             if not type_data:
-                await message.channel.send(
-                    "Unknown monument type. List the choices with !monument types <pathfinder|hero|legend>, "
-                    "then enter one exactly as shown after !monument place."
-                )
+                await message.channel.send("Unknown monument type. Use !monument types to see your available choices.")
                 return
             if profile["xp"] < type_data["required_xp"] or profile.get("tokens_available", 0) < 1:
                 await message.channel.send(
@@ -1521,18 +1466,85 @@ class DaggerfallBot(commands.Bot):
             self._pending_progression_actions[username.casefold()] = {"kind": "monument", "monument_type": monument_type, "state": state, "expires": time.monotonic() + Config.CONFIRMATION_SECONDS}
             await message.channel.send(f"@{username}, place {type_data['emoji']} {proposed_name} in {state.get('region')}? This permanently spends 1 token. Confirm within {Config.CONFIRMATION_SECONDS}s: !monument confirm")
             return
-        if action not in {"status"}:
+        if args:
             await message.channel.send(
-                "Unknown monument command. Use !monument for your tokens and placement instructions, "
-                "or !monument types to choose a monument type."
+                "Unknown monument type. Use !monument types to see your available choices."
             )
             return
+        tokens_available = profile.get("tokens_available", 0)
+        token_word = "Token" if tokens_available == 1 else "Tokens"
         await message.channel.send(
-            f"@{username}: {profile.get('tokens_available', 0)} Monument Tokens available • "
-            f"{profile.get('monuments_placed', 0)} monuments placed • next token at {profile.get('next_token_xp')} XP. "
-            "To place one: 1) !monument types 2) stand the Walker in a town or wilderness and use "
-            f"!monument place <type> 3) !monument confirm. Registry: {Config.DAGGERWALK_WEB_URL}/monuments/"
+            f"@{username} — {tokens_available} Monument {token_word} • "
+            f"{profile.get('monuments_placed', 0)} placed • Next token: {profile.get('next_token_xp')} XP "
+            f"• Place here: !monument types → !monument <type> • Registry: {Config.DAGGERWALK_WEB_URL}/monuments/"
         )
+
+    async def _send_monument_types(self, message, profile, monument_types, more=False):
+        """Show a small random menu, or the choices left out of that menu."""
+        groups = {}
+        for key, item in monument_types.items():
+            if profile["xp"] >= item["required_xp"]:
+                groups.setdefault(item["required_title"], []).append(key)
+        if not groups:
+            await message.channel.send(
+                f"@{profile['username']}, monument types unlock at Pathfinder Renown."
+            )
+            return
+
+        username_key = profile["username"].casefold()
+        samples = getattr(self, "_monument_type_samples", None)
+        if samples is None:
+            samples = self._monument_type_samples = {}
+        if not more:
+            selected = {
+                title: random.sample(names, min(3, len(names)))
+                for title, names in groups.items()
+            }
+            samples[username_key] = selected
+            footer = " • More: !monument types more • Place: !monument <type>"
+            await self._send_monument_type_groups(message, selected, footer)
+            return
+
+        selected = samples.get(username_key)
+        if not selected:
+            await message.channel.send(
+                f"@{profile['username']} — Start with !monument types to draw your choices."
+            )
+            return
+        remaining = {
+            title: [name for name in names if name not in selected.get(title, [])]
+            for title, names in groups.items()
+        }
+        remaining = {title: names for title, names in remaining.items() if names}
+        if not remaining:
+            await message.channel.send(
+                f"@{profile['username']} — No other unlocked types • Place: !monument <type>"
+            )
+            return
+        await self._send_monument_type_groups(
+            message, remaining, " • Place: !monument <type>"
+        )
+
+    @staticmethod
+    async def _send_monument_type_groups(message, groups, footer):
+        """Format grouped monument choices into Twitch-sized messages."""
+        messages = []
+        current = "🏛️ "
+        for title, names in groups.items():
+            for index, name in enumerate(names):
+                if index == 0:
+                    separator = "" if current == "🏛️ " else " │ "
+                    addition = f"{separator}{title}: {name}"
+                else:
+                    addition = f" • {name}"
+                if len(current) + len(addition) + len(footer) > 480:
+                    messages.append(current)
+                    current = f"🏛️ {title} (continued): {name}"
+                else:
+                    current += addition
+        messages.append(current + footer)
+        for text in messages:
+            await message.channel.send(text)
 
     async def _handle_pending_progression_action(self, message, action, kind, label):
         if action not in {"confirm", "cancel"}:
@@ -1737,7 +1749,9 @@ class DaggerfallBot(commands.Bot):
             if args and args[0].lower() == "category":
                 # If only "category" is provided without specific categories
                 if len(args) == 1:
-                    await message.channel.send("Choose categories for the song shuffle. Options: world, dungeon, misc, battle, all, off. Multiple categories supported. Ex: !song category world misc")
+                    await message.channel.send(
+                        "Categories: world|dungeon|misc|battle|all|off • Usage: !song category <category...>"
+                    )
                     return
                 # If they provided categories, proceed with vote for category shuffle
                 # The validation will be handled in execute_voted_command
@@ -2587,9 +2601,7 @@ class DaggerfallBot(commands.Bot):
         """Display active mods"""
         logging.info("Executing modlist command")
         channel = self.connected_channels[0]
-        await channel.send("Daggerwalk uses the following Daggerfall Unity mods:")
-        await asyncio.sleep(Config.CHAT_DELAY)
-        await channel.send(", ".join(Config.ACTIVE_MODS))
+        await channel.send(f"Mods: {', '.join(Config.ACTIVE_MODS)}")
 
     async def save_game(self):
         """Save game state"""
@@ -2604,7 +2616,7 @@ class DaggerfallBot(commands.Bot):
     async def exec_command(self, args):
         """Execute console command (admin only)"""
         if not args:
-            await self.connected_channels[0].send("Usage: !exec <command> <args>")
+            await self.connected_channels[0].send("Usage: !exec <command> [args]")
             return
         logging.info(f"Executing admin command: {' '.join(args)}")
         await self.send_console_command(" ".join(args))
@@ -2725,7 +2737,7 @@ class DaggerfallBot(commands.Bot):
             if self.connected_channels:
                 if args:
                     if len(args) != 1 or args[0] not in ("1", "2", "3"):
-                        await self.connected_channels[0].send("Usage: !quest or !quest <1-3>")
+                        await self.connected_channels[0].send("Usage: !quest [1-3]")
                         return
                     slot = int(args[0])
                     selected = next((quest for quest in active_quests if quest.get("slot") == slot), None)

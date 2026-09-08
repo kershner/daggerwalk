@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -437,6 +438,79 @@ class HelpCommandTests(unittest.IsolatedAsyncioTestCase):
     def test_every_listed_command_has_details(self):
         listed = set(bot_module.Config.HELP_COMMANDS + bot_module.Config.MORE_COMMANDS)
         self.assertTrue(listed <= set(bot_module.Config.COMMAND_HELP))
+
+    async def test_modlist_uses_one_message(self):
+        channel = RecordingChannel()
+        await self.make_bot(channel).modlist()
+
+        self.assertEqual(len(channel.messages), 1)
+        self.assertTrue(channel.messages[0].startswith("Mods: "))
+        self.assertLessEqual(len(channel.messages[0]), 500)
+
+    async def test_song_category_guidance_is_compact(self):
+        channel = RecordingChannel()
+        bot = self.make_bot(channel)
+        bot.voting_active = False
+
+        await bot.start_vote(Message("!song category", channel), "song")
+
+        self.assertEqual(
+            channel.messages,
+            ["Categories: world|dungeon|misc|battle|all|off • Usage: !song category <category...>"],
+        )
+
+    async def test_exec_usage_marks_trailing_args_optional(self):
+        channel = RecordingChannel()
+
+        await self.make_bot(channel).exec_command([])
+
+        self.assertEqual(channel.messages, ["Usage: !exec <command> [args]"])
+
+    async def test_quest_usage_uses_standard_optional_parameter_format(self):
+        channel = RecordingChannel()
+        bot = self.make_bot(channel)
+        bot._latest_response_data = {"active_quests": []}
+        bot._latest_response_at = datetime.now(timezone.utc)
+
+        await bot.quest(["4"])
+
+        self.assertEqual(channel.messages, ["Usage: !quest [1-3]"])
+
+    def test_scheduled_chat_cadence(self):
+        self.assertEqual(bot_module.Config.SCHEDULED_MESSAGE_INTERVAL, 20 * 60)
+
+    async def test_scheduled_messages_rotate_in_order(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._scheduled_message_index = 0
+        bot.help = AsyncMock()
+        bot.game_info = AsyncMock()
+        bot.quest = AsyncMock()
+        bot._scheduled_progression = AsyncMock()
+
+        for _ in range(4):
+            await bot._scheduled_message()
+
+        bot.help.assert_awaited_once_with()
+        bot.game_info.assert_awaited_once_with()
+        bot.quest.assert_awaited_once_with()
+        bot._scheduled_progression.assert_awaited_once_with()
+        self.assertEqual(bot._scheduled_message_index, 4)
+
+    async def test_scheduler_posts_help_before_first_interval(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._state_ready = asyncio.Event()
+        bot._state_ready.set()
+        bot._scheduled_message = AsyncMock()
+
+        with patch.object(
+            bot_module.asyncio,
+            "sleep",
+            AsyncMock(side_effect=asyncio.CancelledError),
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.message_scheduler()
+
+        bot._scheduled_message.assert_awaited_once_with()
 
 
 if __name__ == "__main__":
