@@ -655,7 +655,7 @@ class HelpCommandTests(unittest.IsolatedAsyncioTestCase):
             await bot._scheduled_message()
 
         bot.help.assert_awaited_once_with()
-        bot.game_info.assert_awaited_once_with()
+        bot.game_info.assert_awaited_once_with(use_local=True)
         bot.quest.assert_awaited_once_with()
         bot._scheduled_progression.assert_awaited_once_with()
         self.assertEqual(bot._scheduled_message_index, 4)

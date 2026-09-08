@@ -705,7 +705,12 @@ class DaggerfallBot(commands.Bot):
 
     async def _scheduled_message(self):
         """Cycle through help, journey info, quests, and progression discovery."""
-        messages = (self.help, self.game_info, self.quest, self._scheduled_progression)
+        messages = (
+            self.help,
+            lambda: self.game_info(use_local=True),
+            self.quest,
+            self._scheduled_progression,
+        )
         message_coro = messages[self._scheduled_message_index % len(messages)]
         self._scheduled_message_index += 1
         await message_coro()
@@ -2414,8 +2419,8 @@ class DaggerfallBot(commands.Bot):
         try:
             local_data = await self.get_map_json_data() if use_local else None
 
-            # Scheduled announcements retain the persisted five-minute behavior.
-            # Interactive !info must never create a server write just to get fresh data.
+            # Fresh local info must never create a server write. Callers can still
+            # omit use_local when they explicitly need the persisted snapshot.
             if not use_local and (not self._latest_response_data or (
                 self._latest_response_at and
                 (datetime.now(timezone.utc) - self._latest_response_at).total_seconds() > Config.REFRESH_INTERVAL * 2
