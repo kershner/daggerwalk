@@ -46,6 +46,11 @@ def make_bot(channel=None):
     bot._latest_response_at = None
     bot._recent_world_positions = []
     bot._latest_command_state = None
+    bot._stuck_anchor_position = None
+    bot._last_world_movement_at = None
+    bot._autowalk_active = True
+    bot._last_unstuck_command = None
+    bot._bot_started_at_monotonic = time.monotonic()
     bot._announced_quest_completion_keys = set()
     bot._pending_quest_completions = {}
     bot._last_bluesky_quest_post_date = None
@@ -158,34 +163,55 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
         bot.refresh_now.assert_not_awaited()
         self.assertEqual(len(channel.messages), 1)
 
-    async def test_stuck_check_uses_cached_positions_without_logs_api_call(self):
+    def test_local_position_samples_reset_inactivity_only_after_real_movement(self):
         bot = make_bot()
-        bot._bot_started_at_monotonic = time.monotonic() - 301
-        bot._recent_world_positions = [(0, 0), (100, 100)]
 
-        with patch.object(bot_module.requests, "get") as get:
+        self.assertTrue(bot._record_local_world_position({"worldX": 100, "worldZ": 200}, 10))
+        bot._record_local_world_position({"worldX": 105, "worldZ": 205}, 40)
+        self.assertEqual(bot._last_world_movement_at, 10)
+
+        bot._record_local_world_position({"worldX": 111, "worldZ": 200}, 50)
+        self.assertEqual(bot._last_world_movement_at, 50)
+        self.assertEqual(bot._stuck_anchor_position, (111.0, 200.0))
+
+    async def test_stuck_check_recovers_after_one_minute_without_server_call(self):
+        channel = RecordingChannel()
+        bot = make_bot(channel)
+        bot._bot_started_at_monotonic = 0
+        bot._stuck_anchor_position = (100.0, 200.0)
+        bot._last_world_movement_at = 100
+        bot.log_chat_command = AsyncMock()
+        bot.bighop = AsyncMock()
+
+        class Noon(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return cls(2026, 9, 7, 12, tzinfo=tz)
+
+        with (
+            patch.object(bot_module, "datetime", Noon),
+            patch.object(bot_module.time, "monotonic", side_effect=[160, 160, 160]),
+            patch.object(bot_module.requests, "get") as get,
+        ):
             await bot.check_if_bot_is_stuck()
 
         get.assert_not_called()
+        bot.bighop.assert_awaited_once()
+        self.assertEqual(bot._last_unstuck_command, "bighop")
+        self.assertEqual(len(channel.messages), 2)
 
-    async def test_stuck_check_uses_piggybacked_command_state(self):
-        bot = make_bot()
-        bot._bot_started_at_monotonic = time.monotonic() - 301
-        bot._recent_world_positions = [(100, 100), (100, 100)]
-        bot._latest_command_state = {
-            "last_stop": {
-                "id": 2,
-                "command": "stop",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
-            "last_walk": {"id": 1, "command": "walk"},
-            "last_command": {"id": 2, "command": "stop"},
-        }
+    async def test_stuck_check_does_not_recover_after_intentional_stop(self):
+        bot = make_bot(RecordingChannel())
+        bot._bot_started_at_monotonic = 0
+        bot._stuck_anchor_position = (100.0, 200.0)
+        bot._last_world_movement_at = 100
+        bot._autowalk_active = False
+        bot.bighop = AsyncMock()
 
-        with patch.object(bot_module.requests, "get") as get:
+        with patch.object(bot_module.time, "monotonic", return_value=1000):
             await bot.check_if_bot_is_stuck()
 
-        get.assert_not_called()
+        bot.bighop.assert_not_awaited()
 
     async def test_background_refresh_sends_info_only_after_success(self):
         bot = make_bot()

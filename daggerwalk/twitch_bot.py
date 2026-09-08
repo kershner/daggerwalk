@@ -70,6 +70,8 @@ class Config:
     BOT_USERNAME = "daggerwalk_bot"
     REFRESH_INTERVAL = 300  # 5 minutes
     LOCAL_STATE_REFRESH_INTERVAL = 30  # seconds
+    STUCK_INACTIVITY_SECONDS = 60
+    STUCK_TOLERANCE = 10  # world-coordinate units
     TWITCH_TITLE_MIN_INTERVAL = 60  # seconds
     AUTOSAVE_INTERVAL = 600  # 10 minutes
     CHAT_DELAY = 1.5  # seconds
@@ -486,6 +488,10 @@ class DaggerfallBot(commands.Bot):
         self._latest_response_at = None
         self._recent_world_positions = []
         self._latest_command_state = None
+        self._stuck_anchor_position = None
+        self._last_world_movement_at = None
+        self._autowalk_active = True
+        self._last_unstuck_command = None
         self._progression = self._load_progression_cache()
         self._pending_progression_actions = {}
         self._monument_type_samples = {}
@@ -734,8 +740,6 @@ class DaggerfallBot(commands.Bot):
                         self._state_ready.set()  # unblocks scheduler/commands that want initial state
                     await self.game_info()
 
-                # Stuck check (run on a calm interval, not on every command/refresh)
-                await self.check_if_bot_is_stuck()
             except Exception as e:
                 logging.error(f"data_refresh_loop error: {e}")
             await asyncio.sleep(Config.REFRESH_INTERVAL)
@@ -1015,7 +1019,6 @@ class DaggerfallBot(commands.Bot):
 
     async def local_state_refresh_loop(self):
         """Sample local game state without increasing routine server writes."""
-        await self._state_ready.wait()
         logging.info("Starting local state refresh loop")
 
         # Ensure track map is loaded
@@ -1028,6 +1031,8 @@ class DaggerfallBot(commands.Bot):
         while True:
             try:
                 data = await self.get_map_json_data()
+                self._record_local_world_position(data)
+                await self.check_if_bot_is_stuck()
                 new_song_name = data.get("currentSong")
 
                 if new_song_name and new_song_name != last_song:
@@ -1116,11 +1121,6 @@ class DaggerfallBot(commands.Bot):
                     self._latest_response_data = new_data
                     self._latest_response_at = datetime.now(timezone.utc)
                     self._latest_command_state = new_data.get("command_state")
-                    log = new_data.get("log") or {}
-                    position = (log.get("world_x"), log.get("world_z"))
-                    if None not in position:
-                        self._recent_world_positions.append(position)
-                        self._recent_world_positions = self._recent_world_positions[-2:]
                     return True
             except Exception:
                 logging.exception("refresh_now error")
@@ -1665,11 +1665,14 @@ class DaggerfallBot(commands.Bot):
         await asyncio.to_thread(send_game_input, key.value, repeat, 0.15)
 
     async def start_walking(self, channel):
+        self._autowalk_active = True
+        self._last_world_movement_at = time.monotonic()
         await self.send_movement(GameKeys.WALK)
         await channel.send("Autowalk started.")
 
     async def stop_movement(self, channel):
         """Cancel pending/held movement immediately and stop the autowalk mod."""
+        self._autowalk_active = False
         self._movement.cancel_all()
         async with self._game_ui():
             await asyncio.to_thread(send_game_input, GameKeys.BACK.value, 1, 0.1)
@@ -2463,12 +2466,37 @@ class DaggerfallBot(commands.Bot):
             logging.error(f"Info error: {e}")
 
 
+    def _record_local_world_position(self, data, sampled_at=None):
+        """Update the bot-only movement clock from a local game-state sample."""
+        try:
+            position = (float(data["worldX"]), float(data["worldZ"]))
+        except (KeyError, TypeError, ValueError):
+            logging.warning("Local position unavailable; skipping stuck sample")
+            return False
+
+        sampled_at = time.monotonic() if sampled_at is None else sampled_at
+        self._recent_world_positions.append(position)
+        self._recent_world_positions = self._recent_world_positions[-2:]
+
+        anchor = getattr(self, "_stuck_anchor_position", None)
+        if anchor is None:
+            self._stuck_anchor_position = position
+            self._last_world_movement_at = sampled_at
+            return True
+
+        distance = ((position[0] - anchor[0]) ** 2 + (position[1] - anchor[1]) ** 2) ** 0.5
+        if distance > Config.STUCK_TOLERANCE:
+            logging.info("Local movement detected (%.1f units)", distance)
+            self._stuck_anchor_position = position
+            self._last_world_movement_at = sampled_at
+        return True
+
     async def check_if_bot_is_stuck(self):
         logging.info("Starting stuck check...")
         
-        # Skip stuck check for 5 minutes after bot startup
+        # Allow a full inactivity window after startup before intervening.
         uptime = time.monotonic() - self._bot_started_at_monotonic
-        if uptime < 300:
+        if uptime < Config.STUCK_INACTIVITY_SECONDS:
             logging.info(f"Skipping stuck check - bot uptime only {uptime:.1f}s")
             return
 
@@ -2483,60 +2511,19 @@ class DaggerfallBot(commands.Bot):
             return
         
         try:
-            positions = getattr(self, "_recent_world_positions", [])
-            if len(positions) < 2:
-                logging.info("Not enough locally cached positions for stuck check")
+            if not getattr(self, "_autowalk_active", True):
+                logging.info("Autowalk was intentionally stopped; skipping stuck check")
                 return
 
-            pos1, pos2 = positions[-1], positions[-2]
-            logging.info(f"Position comparison: pos1={pos1}, pos2={pos2}")
-            
-            # Calculate distance between positions (allow for small movements)
-            STUCK_TOLERANCE = 10  # Units
-            if pos1[0] is not None and pos1[1] is not None and pos2[0] is not None and pos2[1] is not None:
-                distance = ((pos1[0] - pos2[0]) ** 2 + (pos1[1] - pos2[1]) ** 2) ** 0.5
-                logging.info(f"Distance between positions: {distance:.1f} (tolerance: {STUCK_TOLERANCE})")
-                
-                if distance > STUCK_TOLERANCE:
-                    logging.info("Movement detected - not stuck")
-                    return
-            else:
-                logging.warning("Position data incomplete - skipping stuck check")
+            last_movement_at = getattr(self, "_last_world_movement_at", None)
+            if last_movement_at is None or getattr(self, "_stuck_anchor_position", None) is None:
+                logging.info("No local position sample available for stuck check")
                 return
 
-            logging.info("Positions are identical - checking stop/walk commands...")
-
-            command_state = getattr(self, "_latest_command_state", None)
-            if not isinstance(command_state, dict):
-                logging.warning("Command state unavailable; deferring stuck recovery")
+            inactive_for = time.monotonic() - last_movement_at
+            if inactive_for < Config.STUCK_INACTIVITY_SECONDS:
+                logging.info("Movement inactivity %.1fs; not stuck yet", inactive_for)
                 return
-
-            last_stop = command_state.get("last_stop") or {}
-            last_walk = command_state.get("last_walk") or {}
-            stop_id = last_stop.get("id", 0)
-            walk_id = last_walk.get("id", 0)
-            logging.info(f"Last stop ID: {stop_id}, last walk ID: {walk_id}")
-
-            # only consider stop newer than walk if the stop is from today
-            if last_stop:
-                stop_created = last_stop.get("timestamp")
-                logging.info(f"Last stop timestamp: {stop_created}")
-                if stop_created:
-                    # handle ISO8601 with optional 'Z'
-                    stop_time = datetime.fromisoformat(stop_created.replace("Z", "+00:00"))
-                    if stop_time.tzinfo is None:
-                        stop_time = est.localize(stop_time)
-                    stop_date = stop_time.astimezone(est).date()
-                    today = datetime.now(est).date()
-                    logging.info(f"Stop time: {stop_time}, today: {today}")
-                    if stop_date == today and stop_id > walk_id:
-                        logging.info("Recent stop command found - not attempting unstuck")
-                        return
-
-            # Use the piggybacked latest command to alternate recovery after bighop.
-            last_command = command_state.get("last_command") or {}
-            last_cmd = (last_command.get("command") or "").lower() or None
-            logging.info(f"Last command: {last_cmd}")
 
             if not self.connected_channels:
                 logging.warning("No connected channels for stuck message")
@@ -2546,13 +2533,19 @@ class DaggerfallBot(commands.Bot):
             logging.info("Bot appears stuck - sending unstuck message...")
             await channel.send("The Walker might be stuck, attempting to free them...")
 
-            if last_cmd == "bighop":
+            # Restart the local inactivity window before running recovery so this
+            # cannot fire again on the next 30-second sample.
+            self._last_world_movement_at = time.monotonic()
+
+            if getattr(self, "_last_unstuck_command", None) == "bighop":
                 logging.info("Executing left 50 as unstuck action")
+                self._last_unstuck_command = "left"
                 await self.log_chat_command(Config.BOT_USERNAME, "left", ["50"])
                 await channel.send("!left 50")
                 await self.send_movement(GameKeys.LEFT, args=["50"])
             else:
                 logging.info("Executing bighop as unstuck action")
+                self._last_unstuck_command = "bighop"
                 await self.log_chat_command(Config.BOT_USERNAME, "bighop", [])
                 await channel.send("!bighop")
                 await self.bighop()
