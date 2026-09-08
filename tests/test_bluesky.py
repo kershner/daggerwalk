@@ -107,5 +107,54 @@ class QuestCompletionPostTests(unittest.TestCase):
         )
 
 
+class MonumentPostTests(unittest.TestCase):
+    def test_post_text_is_compact_and_uses_existing_description(self):
+        text = bluesky.build_monument_post({
+            "id": 42,
+            "description": (
+                "On a rainy afternoon in mid-autumn, this Cairn was raised in "
+                "Daggerfall by Walker, Pathfinder. 1 Frostfall, 3E 405."
+            ),
+        }, "Walker", "🪨")
+
+        self.assertEqual(
+            text,
+            "🪨 Monument raised by Walker!\n\n"
+            "On a rainy afternoon in mid-autumn, this Cairn was raised in "
+            "Daggerfall by Walker, Pathfinder. 1 Frostfall, 3E 405.\n\n"
+            "📜 Eligible for future quests.\n\n"
+            "🗺️ View on Map",
+        )
+        self.assertLessEqual(len(text), bluesky.POST_TEXT_LIMIT)
+
+    def test_post_links_username_and_view_on_map(self):
+        repo = Mock()
+        client = types.SimpleNamespace(
+            me=types.SimpleNamespace(did="did:example:daggerwalk"),
+            com=types.SimpleNamespace(atproto=types.SimpleNamespace(repo=repo)),
+        )
+        monument = {"id": 42, "description": "A cairn in Daggerfall."}
+
+        bluesky.post_monument(client, monument, "Walker", "🪨", "3jzfcijpj2z2a")
+
+        put_data = repo.put_record.call_args.kwargs["data"]
+        record = put_data["record"]
+        self.assertEqual(put_data["rkey"], "3jzfcijpj2z2a")
+        linked_text = []
+        for facet in record["facets"]:
+            start = facet["index"]["byteStart"]
+            end = facet["index"]["byteEnd"]
+            linked_text.append(record["text"].encode("utf-8")[start:end].decode("utf-8"))
+        self.assertEqual(linked_text, ["Walker", "View on Map"])
+        self.assertEqual(
+            record["facets"][0]["features"][0]["uri"],
+            "https://www.twitch.tv/Walker",
+        )
+        self.assertEqual(
+            record["facets"][1]["features"][0]["uri"],
+            "https://kershner.org/daggerwalk/?monument=42",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

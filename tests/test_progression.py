@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import asyncio
 import time
 import unittest
 from unittest.mock import Mock, patch
@@ -25,6 +26,10 @@ def make_bot():
     bot._pending_progression_actions = {}
     bot._monument_type_samples = {}
     bot._read_rate_limits = {}
+    bot.bluesky_client = None
+    bot._last_bluesky_monument_post_date = None
+    bot._bluesky_monument_post_lock = asyncio.Lock()
+    bot._save_quest_completion_state = lambda: None
     bot._progression = {
         "profiles": {"walker": {
             "username": "Walker", "position": 12, "renown_title": "Pathfinder",
@@ -268,3 +273,16 @@ class ProgressionChatTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("This Cairn was raised by Walker", channel.messages[0])
         self.assertIn("https://kershner.org/daggerwalk/?monument=42", channel.messages[0])
+
+    async def test_only_one_monument_is_posted_to_bluesky_per_eastern_day(self):
+        bot, channel = make_bot(), Channel()
+        bot.bluesky_client = object()
+        first = {"id": 42, "description": "The first monument."}
+        second = {"id": 43, "description": "The second monument."}
+
+        with patch.object(bot_module.bluesky_live, "post_monument") as post:
+            await bot._maybe_post_monument(first, "Walker", "🪨")
+            await bot._maybe_post_monument(second, "AnotherWalker", "🗿")
+
+        post.assert_called_once()
+        self.assertEqual(post.call_args.args[1], first)

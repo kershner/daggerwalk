@@ -14,6 +14,7 @@ bluesky_stub.login = lambda *args: None
 bluesky_stub.clear_live = lambda *args: None
 bluesky_stub.ensure_live = lambda *args: None
 bluesky_stub.post_quest_completion = lambda *args: None
+bluesky_stub.post_monument = lambda *args: None
 bluesky_stub.new_tid = lambda: "3jzfcijpj2z2a"
 sys.modules.setdefault("daggerwalk.bluesky", bluesky_stub)
 

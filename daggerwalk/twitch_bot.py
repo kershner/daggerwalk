@@ -524,6 +524,8 @@ class DaggerfallBot(commands.Bot):
         self._announced_quest_completion_keys = set()
         self._pending_quest_completions = {}
         self._last_bluesky_quest_post_date = None
+        self._last_bluesky_monument_post_date = None
+        self._bluesky_monument_post_lock = asyncio.Lock()
         self._load_quest_completion_state()
 
         self.state = {
@@ -948,6 +950,9 @@ class DaggerfallBot(commands.Bot):
                 self._last_bluesky_quest_post_date = saved_state.get(
                     "last_bluesky_quest_post_date"
                 )
+                self._last_bluesky_monument_post_date = saved_state.get(
+                    "last_bluesky_monument_post_date"
+                )
             else:
                 # Backward compatibility with the original list-only file.
                 events = saved_state
@@ -993,6 +998,7 @@ class DaggerfallBot(commands.Bot):
                 json.dump({
                     "events": list(self._pending_quest_completions.values()),
                     "last_bluesky_quest_post_date": self._last_bluesky_quest_post_date,
+                    "last_bluesky_monument_post_date": self._last_bluesky_monument_post_date,
                 }, state_file, ensure_ascii=False)
             os.replace(temp_path, state_path)
         except Exception as e:
@@ -1675,6 +1681,44 @@ class DaggerfallBot(commands.Bot):
                 f"🏛️ {monument['name']} now stands permanently in the Iliac Bay. "
                 f"{monument['description']} 🗺️ Map: {map_link}"
             )
+            monument_type = (self._progression.get("monument_types") or {}).get(
+                pending["monument_type"], {}
+            )
+            await self._maybe_post_monument(
+                monument,
+                username,
+                monument_type.get("emoji", "🏛️"),
+            )
+
+    async def _maybe_post_monument(self, monument, twitch_username, emoji):
+        """Post the first monument raised each Eastern day to Bluesky."""
+        if not getattr(self, "bluesky_client", None):
+            logging.warning("Bluesky monument post skipped: client is unavailable")
+            return
+        async with self._bluesky_monument_post_lock:
+            today_eastern = datetime.now(pytz.timezone("US/Eastern")).date().isoformat()
+            if getattr(self, "_last_bluesky_monument_post_date", None) == today_eastern:
+                logging.info(
+                    "Bluesky monument post skipped for %s: daily post already sent",
+                    monument.get("id"),
+                )
+                return
+            try:
+                await asyncio.to_thread(
+                    bluesky_live.post_monument,
+                    self.bluesky_client,
+                    monument,
+                    twitch_username,
+                    emoji,
+                    bluesky_live.new_tid(),
+                )
+            except Exception:
+                logging.exception(
+                    "Bluesky monument post failed for %s", monument.get("id")
+                )
+                return
+            self._last_bluesky_monument_post_date = today_eastern
+            self._save_quest_completion_state()
 
     async def admin_command(self, message, cmd):
         """Execute admin-only commands"""

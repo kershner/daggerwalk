@@ -1,4 +1,4 @@
-"""Bluesky live-status and quest-completion publishing helpers."""
+"""Bluesky live-status and progression publishing helpers."""
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from atproto import Client
@@ -14,6 +14,7 @@ REFRESH_EARLY = timedelta(minutes=5)
 LIVE_URI = "https://www.twitch.tv/daggerwalk"
 DAGGERWALK_URI = "https://kershner.org/daggerwalk"
 TID_ALPHABET = "234567abcdefghijklmnopqrstuvwxyz"
+POST_TEXT_LIMIT = 300
 
 
 def login(handle: str, app_password: str) -> Client | None:
@@ -163,40 +164,98 @@ def quest_completion_uri(quest: dict) -> str:
     return f"{DAGGERWALK_URI}/quests/{quest_id}/" if quest_id else DAGGERWALK_URI
 
 
-def post_quest_completion(c: Client, quest: dict, rkey: str) -> None:
-    """Publish or replace one idempotent quest-completion post."""
-    text, alt = build_quest_completion_post(quest)
-    quest_uri = quest_completion_uri(quest)
-    url_start = text.index(quest_uri)
+def build_monument_post(monument: dict, twitch_username: str, emoji: str) -> str:
+    """Build a compact monument announcement within Bluesky's text limit."""
+    lines = [
+        f"{emoji or '🏛️'} Monument raised by {twitch_username}!",
+        "📜 Eligible for future quests.",
+        "🗺️ View on Map",
+    ]
+    description = (monument.get("description") or "").strip()
+    if description:
+        description_limit = POST_TEXT_LIMIT - sum(map(len, lines)) - 6
+        lines.insert(1, _clamp(description, description_limit))
+    return "\n\n".join(lines)
+
+
+def _link_facet(text: str, label: str, uri: str, start: int = 0) -> dict:
+    label_start = text.index(label, start)
+    return {
+        "index": {
+            "byteStart": len(text[:label_start].encode("utf-8")),
+            "byteEnd": len(text[:label_start + len(label)].encode("utf-8")),
+        },
+        "features": [{
+            "$type": "app.bsky.richtext.facet#link",
+            "uri": uri,
+        }],
+    }
+
+
+def _put_feed_post(c: Client, text: str, facets: list, rkey: str, embed=None) -> None:
     record = {
         "$type": "app.bsky.feed.post",
         "text": text,
         "createdAt": _now_z(),
-        "facets": [{
-            "index": {
-                "byteStart": len(text[:url_start].encode("utf-8")),
-                "byteEnd": len(text[:url_start + len(quest_uri)].encode("utf-8")),
-            },
-            "features": [{
-                "$type": "app.bsky.richtext.facet#link",
-                "uri": quest_uri,
-            }],
-        }],
+        "facets": facets,
     }
-
-    portrait_url = quest.get("quest_giver_img_url")
-    if portrait_url and alt:
-        response = requests.get(portrait_url, timeout=15)
-        response.raise_for_status()
-        blob = c.com.atproto.repo.upload_blob(BytesIO(response.content))
-        record["embed"] = {
-            "$type": "app.bsky.embed.images",
-            "images": [{"image": blob.blob, "alt": _clamp(alt, 1000)}],
-        }
-
+    if embed:
+        record["embed"] = embed
     c.com.atproto.repo.put_record(data={
         "repo": c.me.did,
         "collection": "app.bsky.feed.post",
         "rkey": rkey,
         "record": record,
     })
+
+
+def post_monument(
+    c: Client,
+    monument: dict,
+    twitch_username: str,
+    emoji: str,
+    rkey: str,
+) -> None:
+    """Publish a monument announcement with Twitch and map links."""
+    text = build_monument_post(monument, twitch_username, emoji)
+    username_start = text.index("raised by ") + len("raised by ")
+    monument_id = monument.get("id")
+    map_uri = f"{DAGGERWALK_URI}/?monument={monument_id}" if monument_id else DAGGERWALK_URI
+    _put_feed_post(
+        c,
+        text,
+        [
+            _link_facet(
+                text,
+                twitch_username,
+                f"https://www.twitch.tv/{twitch_username}",
+                username_start,
+            ),
+            _link_facet(text, "View on Map", map_uri),
+        ],
+        rkey,
+    )
+
+
+def post_quest_completion(c: Client, quest: dict, rkey: str) -> None:
+    """Publish or replace one idempotent quest-completion post."""
+    text, alt = build_quest_completion_post(quest)
+    quest_uri = quest_completion_uri(quest)
+    url_start = text.index(quest_uri)
+    embed = None
+    portrait_url = quest.get("quest_giver_img_url")
+    if portrait_url and alt:
+        response = requests.get(portrait_url, timeout=15)
+        response.raise_for_status()
+        blob = c.com.atproto.repo.upload_blob(BytesIO(response.content))
+        embed = {
+            "$type": "app.bsky.embed.images",
+            "images": [{"image": blob.blob, "alt": _clamp(alt, 1000)}],
+        }
+    _put_feed_post(
+        c,
+        text,
+        [_link_facet(text, quest_uri, quest_uri, url_start)],
+        rkey,
+        embed,
+    )
