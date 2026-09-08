@@ -131,6 +131,20 @@ class LiveTitleUpdateTests(unittest.IsolatedAsyncioTestCase):
 
         self.bot.update_stream_title.assert_awaited_once()
 
+    async def test_shutdown_presence_is_not_overwritten_by_local_state(self):
+        self.bot._stream_presence_override = bot_module.Config.SHUTDOWN_STATUS
+
+        with patch.object(bot_module.time, "monotonic", return_value=100.0):
+            self.assertTrue(
+                await self.bot._maybe_update_stream_title(self.local_data("23:55:00"))
+            )
+
+        self.assertEqual(
+            self.bot.update_stream_title.await_args.args[0],
+            bot_module.Config.SHUTDOWN_STATUS,
+        )
+        self.assertEqual(self.bot._last_stream_title, bot_module.Config.SHUTDOWN_STATUS)
+
 
 if __name__ == "__main__":
     unittest.main()

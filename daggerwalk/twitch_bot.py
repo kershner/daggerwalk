@@ -31,6 +31,7 @@ from .paths import (
     PARAMETERS_FILE,
     QUEST_COMPLETION_STATE_FILE,
     PROGRESSION_CACHE_FILE,
+    READY_FLAG,
     ensure_runtime_dir,
 )
 
@@ -162,6 +163,10 @@ class Config:
     READ_GLOBAL_COOLDOWN = 5
     STATUS_USER_COOLDOWN = 15
     SCHEDULED_MESSAGE_INTERVAL = 20 * 60
+    STARTUP_STATUS = "Starting up • Daggerwalk will be online shortly"
+    STARTUP_COMMAND_RESPONSE = "Daggerwalk is starting up; please wait."
+    ONLINE_MESSAGE = "Daggerwalk is now online!"
+    SHUTDOWN_STATUS = "Shutting down • The Walker will be back in the morning"
     GUILD_COOLDOWN_DAYS = 30
     QUALIFYING_COMMANDS = {
         "walk", "stop", "jump", "left", "right", "up", "down", "center",
@@ -510,6 +515,8 @@ class DaggerfallBot(commands.Bot):
         self.votes = {}
         self._state_ready = asyncio.Event()
         self._startup_tasks_started = False
+        self._runtime_ready = False
+        self._stream_presence_override = None
         self._refresh_lock = asyncio.Lock()
         self._ui_lock = asyncio.Lock()
         self._active_command_tasks = set()
@@ -580,7 +587,31 @@ class DaggerfallBot(commands.Bot):
 
     async def event_ready(self):
         logging.info(f"Bot online as {self.nick}")
+        channels = self.connected_channels
+        channel = channels[0] if channels else self.get_channel(Config.TWITCH_CHANNEL)
+        await self._start_when_ready(channel)
+
+    async def _start_when_ready(self, channel):
+        """Complete the shared dev/production startup sequence."""
+        await self._wait_for_game_ready()
+        if channel:
+            await channel.send(Config.ONLINE_MESSAGE)
         await self._start_runtime()
+
+    async def _wait_for_game_ready(self):
+        """Publish startup presence while keeping chat connected until DFU is staged."""
+        if not READY_FLAG.exists():
+            self._stream_presence_override = Config.STARTUP_STATUS
+            await self._refresh_stream_presence(Config.STARTUP_STATUS)
+            logging.info("Waiting for Daggerfall Unity readiness...")
+            while not READY_FLAG.exists():
+                await asyncio.sleep(0.5)
+
+        self._runtime_ready = True
+        self._stream_presence_override = None
+        # Let the first local sample replace startup presence immediately.
+        self._last_stream_title_update_at = 0.0
+        logging.info("Daggerfall Unity is ready; enabling chat commands.")
 
     async def close(self):
         """Close long-lived resources before disconnecting the bot."""
@@ -962,7 +993,6 @@ class DaggerfallBot(commands.Bot):
 
     async def side_effects_loop(self):
         """Run operational side-effects on a steady cadence, decoupled from refresh."""
-        await self._state_ready.wait()
         logging.info("Starting side effects loop")
 
         last_shutdown_notice_date = None
@@ -971,48 +1001,52 @@ class DaggerfallBot(commands.Bot):
             try:
                 est = pytz.timezone("US/Eastern")
                 now_est = datetime.now(est)
-
-                midnight_next = (now_est + timedelta(days=1)).replace(
-                    hour=0, minute=0, second=0, microsecond=0
+                last_shutdown_notice_date = await self._update_scheduled_presence(
+                    now_est, last_shutdown_notice_date
                 )
-                minutes_until = int((midnight_next - now_est).total_seconds() // 60)
-
-                # OFF window: last 10 min before midnight + first 10 min after
-                off_window = (
-                    (0 < minutes_until <= 10)
-                    or (now_est.hour == 0 and now_est.minute < 10)
-                )
-
-                if off_window:
-                    if self.bluesky_client:
-                        await asyncio.to_thread(
-                            bluesky_live.clear_live, self.bluesky_client
-                        )
-
-                    if (
-                        0 < minutes_until <= 10
-                        and last_shutdown_notice_date != now_est.date()
-                    ):
-                        last_shutdown_notice_date = now_est.date()
-                        if self.connected_channels:
-                            await self.connected_channels[0].send(
-                                f"🛌 The Walker will rest for the night in {minutes_until} minutes, "
-                                "at midnight EST. They'll be back in the morning!"
-                            )
-                else:
-                    if self.bluesky_client:
-                        title = self.state.get("bluesky_live_text") or "Live"
-                        await asyncio.to_thread(
-                            bluesky_live.ensure_live,
-                            self.bluesky_client,
-                            title,
-                            "",
-                        )
 
             except Exception as e:
                 logging.error(f"side_effects_loop error: {e}")
 
             await asyncio.sleep(60)
+
+    async def _update_scheduled_presence(self, now_est, last_shutdown_notice_date):
+        """Apply the pre-shutdown, offline, or normal stream presence for this minute."""
+        midnight_next = (now_est + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        minutes_until = int((midnight_next - now_est).total_seconds() // 60)
+
+        if 0 < minutes_until <= 10:
+            if getattr(self, "_stream_presence_override", None) != Config.SHUTDOWN_STATUS:
+                self._stream_presence_override = Config.SHUTDOWN_STATUS
+                await self._refresh_stream_presence(Config.SHUTDOWN_STATUS)
+
+            if last_shutdown_notice_date != now_est.date():
+                last_shutdown_notice_date = now_est.date()
+                if self.connected_channels:
+                    await self.connected_channels[0].send(
+                        f"🌙 Daggerwalk will be shutting down in {minutes_until} minutes. "
+                        "The Walker will be back in the morning, see you then!"
+                    )
+        elif now_est.hour == 0 and now_est.minute < 10:
+            if self.bluesky_client:
+                await asyncio.to_thread(
+                    bluesky_live.clear_live, self.bluesky_client
+                )
+        else:
+            if getattr(self, "_stream_presence_override", None) == Config.SHUTDOWN_STATUS:
+                self._stream_presence_override = None
+            if self.bluesky_client:
+                title = self.state.get("bluesky_live_text") or "Live"
+                await asyncio.to_thread(
+                    bluesky_live.ensure_live,
+                    self.bluesky_client,
+                    title,
+                    "",
+                )
+
+        return last_shutdown_notice_date
 
 
     async def local_state_refresh_loop(self):
@@ -1203,6 +1237,10 @@ class DaggerfallBot(commands.Bot):
         command = parts[0][1:].lower()  # Remove ! prefix
         command = Config.COMMAND_ALIASES.get(command, command)
         args = parts[1:] if len(parts) > 1 else []
+
+        if not getattr(self, "_runtime_ready", True):
+            await message.channel.send(Config.STARTUP_COMMAND_RESPONSE)
+            return
 
         # Qualifying commands are uploaded with the next game-state snapshot.
         if self._is_qualifying_invocation(command, args):
@@ -1677,7 +1715,7 @@ class DaggerfallBot(commands.Bot):
         self._autowalk_active = True
         self._last_world_movement_at = time.monotonic()
         await self.send_movement(GameKeys.WALK)
-        await channel.send("Autowalk started.")
+        await channel.send("Autowalk toggled.")
 
     async def stop_movement(self, channel):
         """Cancel pending/held movement immediately and stop the autowalk mod."""
@@ -2221,19 +2259,8 @@ class DaggerfallBot(commands.Bot):
                 place += f" near {last_known_region}"
         return f"Walking through {place} on a {conditions} ({clock_time})"
 
-    async def update_stream_title(
-        self,
-        region: str,
-        weather: str,
-        time_str: str,
-        date_str: str = "",
-        last_known_region: str = "",
-    ):
+    async def update_stream_title(self, title):
         try:
-            title = self.build_live_text(
-                region, weather, time_str, date_str, last_known_region
-            )
-
             client_id, oauth_token = Config.get_oauth()
 
             if oauth_token.startswith("oauth:"):
@@ -2286,6 +2313,26 @@ class DaggerfallBot(commands.Bot):
             logging.error(f"Failed to update stream title: {e}")
             return False
 
+    async def _refresh_stream_presence(self, title):
+        """Update Twitch and Bluesky to the same lifecycle status."""
+        if self._dev_mode:
+            return
+
+        if await self.update_stream_title(title):
+            self._last_stream_title = title
+            self._last_stream_title_update_at = time.monotonic()
+
+        if self.bluesky_client:
+            try:
+                await asyncio.to_thread(
+                    bluesky_live.ensure_live,
+                    self.bluesky_client,
+                    title,
+                    "",
+                )
+            except Exception as e:
+                logging.error(f"Failed to update Bluesky live status: {e}")
+
     def _local_live_fields(self, data):
         """Extract title inputs from raw local MapData and cached ocean context."""
         region = str(data.get("region") or "").strip()
@@ -2319,7 +2366,8 @@ class DaggerfallBot(commands.Bot):
             return False
 
         self._update_state("bluesky_live_text", title)
-        if self._dev_mode or title == self._last_stream_title:
+        effective_title = getattr(self, "_stream_presence_override", None) or title
+        if self._dev_mode or effective_title == self._last_stream_title:
             return False
 
         now = time.monotonic()
@@ -2331,10 +2379,8 @@ class DaggerfallBot(commands.Bot):
         ):
             return False
 
-        if await self.update_stream_title(
-            region, weather, time_str, date_str, last_known_region
-        ):
-            self._last_stream_title = title
+        if await self.update_stream_title(effective_title):
+            self._last_stream_title = effective_title
             self._last_stream_title_update_at = now
             return True
         return False

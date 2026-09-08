@@ -123,6 +123,17 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(channel.messages, ["A vote is already in progress!"])
 
+    async def test_commands_are_rejected_while_game_is_starting(self):
+        bot = self.make_bot()
+        bot._runtime_ready = False
+        bot._start_command_task = Mock()
+        channel = RecordingChannel()
+
+        await bot.event_message(Message("!walk", channel))
+
+        self.assertEqual(channel.messages, [bot_module.Config.STARTUP_COMMAND_RESPONSE])
+        bot._start_command_task.assert_not_called()
+
     async def test_busy_vote_does_not_block_an_ordinary_command(self):
         bot = self.make_bot()
         channel = RecordingChannel()
@@ -250,6 +261,62 @@ class DevModeTests(unittest.IsolatedAsyncioTestCase):
 
         bot.data_refresh_loop.assert_awaited_once()
 
+    async def test_startup_wait_publishes_presence_then_enables_commands(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._dev_mode = False
+        bot._runtime_ready = False
+        bot._stream_presence_override = None
+        bot._last_stream_title_update_at = 100.0
+        bot._refresh_stream_presence = AsyncMock()
+        ready_flag = Mock()
+        ready_flag.exists.side_effect = [False, False, True]
+
+        with (
+            patch.object(bot_module, "READY_FLAG", ready_flag),
+            patch.object(bot_module.asyncio, "sleep", AsyncMock()) as sleep,
+        ):
+            await bot._wait_for_game_ready()
+
+        bot._refresh_stream_presence.assert_awaited_once_with(bot_module.Config.STARTUP_STATUS)
+        sleep.assert_awaited_once_with(0.5)
+        self.assertTrue(bot._runtime_ready)
+        self.assertIsNone(bot._stream_presence_override)
+        self.assertEqual(bot._last_stream_title_update_at, 0.0)
+
+    async def test_ready_event_announces_online_before_runtime_messages(self):
+        channel = RecordingChannel()
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._dev_channel = channel
+        bot._http = Mock(nick="daggerwalk_bot")
+        bot._wait_for_game_ready = AsyncMock()
+
+        async def start_runtime():
+            channel.messages.append("runtime started")
+
+        bot._start_runtime = start_runtime
+
+        await bot.event_ready()
+
+        self.assertEqual(
+            channel.messages,
+            [bot_module.Config.ONLINE_MESSAGE, "runtime started"],
+        )
+
+    async def test_ready_event_falls_back_to_configured_twitch_channel(self):
+        channel = RecordingChannel()
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._dev_channel = None
+        bot._http = Mock(nick="daggerwalk_bot")
+        bot._connection = Mock(_cache={})
+        bot.get_channel = Mock(return_value=channel)
+        bot._wait_for_game_ready = AsyncMock()
+        bot._start_runtime = AsyncMock()
+
+        await bot.event_ready()
+
+        bot.get_channel.assert_called_once_with(bot_module.Config.TWITCH_CHANNEL)
+        self.assertEqual(channel.messages, [bot_module.Config.ONLINE_MESSAGE])
+
     async def test_dev_refresh_posts_game_data_through_the_normal_pipeline(self):
         bot = object.__new__(bot_module.DaggerfallBot)
         bot._dev_mode = True
@@ -272,6 +339,28 @@ class DevModeTests(unittest.IsolatedAsyncioTestCase):
         post.assert_called_once_with({"worldX": 1})
 
 
+class LifecyclePresenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ten_minute_shutdown_window_updates_presence_and_warns_once(self):
+        channel = RecordingChannel()
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._dev_channel = channel
+        bot._stream_presence_override = None
+        bot._refresh_stream_presence = AsyncMock()
+        bot.bluesky_client = None
+        now = datetime(2026, 9, 7, 23, 51, tzinfo=timezone.utc)
+
+        notice_date = await bot._update_scheduled_presence(now, None)
+        repeated_date = await bot._update_scheduled_presence(now, notice_date)
+
+        self.assertEqual(notice_date, now.date())
+        self.assertEqual(repeated_date, notice_date)
+        bot._refresh_stream_presence.assert_awaited_once_with(
+            bot_module.Config.SHUTDOWN_STATUS
+        )
+        self.assertEqual(len(channel.messages), 1)
+        self.assertIn("shutting down in 9 minutes", channel.messages[0])
+
+
 class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_walk_and_stop_send_feedback(self):
         bot = object.__new__(bot_module.DaggerfallBot)
@@ -288,7 +377,7 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
         bot._movement.cancel_all.assert_called_once()
         self.assertEqual(
             channel.messages,
-            ["Autowalk started.", "All movement stopped."],
+            ["Autowalk toggled.", "All movement stopped."],
         )
 
     async def test_cursor_click_and_doubleclick_send_expected_input(self):

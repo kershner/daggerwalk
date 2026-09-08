@@ -41,7 +41,7 @@ class DevMessage:
 async def _init_bot():
     global _bot
     _bot = DaggerfallBot(dev_channel=_channel)
-    await _bot._start_runtime()
+    await _bot._start_when_ready(_channel)
 
 
 def _run_loop():

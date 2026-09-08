@@ -212,12 +212,7 @@ def wait_for_daggerfall_ready(timeout=240):
     return False
 
 def ensure_dfu_ready(timeout=240, control_mode="twitch"):
-    # Clear stale flag, (re)start DFU if not running, then wait for readiness
-    try:
-        READY_FLAG.unlink(missing_ok=True)
-    except Exception:
-        pass
-
+    # Start DFU if needed, then wait for start_daggerfall() to mark it ready.
     if not is_process_running("DaggerfallUnity.exe"):
         start_daggerfall(control_mode)
     else:
@@ -252,11 +247,30 @@ def run_control_supervised(control_mode):
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if exe == pye else 0
 
     while True:
-        # Both modes pass through the same game startup/readiness gate.
-        ensure_dfu_ready(timeout=240, control_mode=control_mode)
+        # Clear stale readiness before launching controls so they can connect and
+        # report startup status while the game is staged.
+        try:
+            READY_FLAG.unlink(missing_ok=True)
+        except Exception:
+            pass
 
         logging.info(f"Launching {label}...")
         process = subprocess.Popen(command, cwd=base, creationflags=flags)
+
+        # The control process watches READY_FLAG and enables commands only after
+        # the same game startup/readiness gate completes.
+        if not ensure_dfu_ready(timeout=240, control_mode=control_mode):
+            logging.error(f"Stopping {label} after DFU readiness timeout.")
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            logging.info("Retrying startup in 5s...")
+            time.sleep(5)
+            continue
+
         rc = process.wait()
         logging.warning(f"{label.title()} exited with code {rc}. Relaunching in 5s...")
         time.sleep(5)
