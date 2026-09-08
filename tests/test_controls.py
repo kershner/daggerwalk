@@ -153,10 +153,13 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         bot._start_command_task = lambda name, factory: dispatched.append(name)
 
         with patch.object(bot_module.aiofiles, "open", return_value=AsyncFileStub()):
-            for command in ("!w", "!cursor", "!click", "!doubleclick", "!torch", "!center", "!left_click", "!right_click", "!esc"):
+            for command in ("!w", "!cursor", "!click", "!doubleclick", "!torch", "!center", "!mods", "!left_click", "!right_click", "!esc"):
                 await bot.event_message(Message(command, channel))
 
-        self.assertEqual(dispatched, ["walk", "cursor", "click", "doubleclick", "torch", "center"])
+        self.assertEqual(
+            dispatched,
+            ["walk", "cursor", "click", "doubleclick", "torch", "center", "modlist"],
+        )
 
     async def test_movement_alias_preserves_parameters(self):
         bot = self.make_bot()
@@ -603,13 +606,15 @@ class HelpCommandTests(unittest.IsolatedAsyncioTestCase):
         listed = set(bot_module.Config.HELP_COMMANDS + bot_module.Config.MORE_COMMANDS)
         self.assertTrue(listed <= set(bot_module.Config.COMMAND_HELP))
 
-    async def test_modlist_uses_one_message(self):
+    async def test_modlist_links_to_canonical_website_section(self):
         channel = RecordingChannel()
         await self.make_bot(channel).modlist()
 
-        self.assertEqual(len(channel.messages), 1)
-        self.assertTrue(channel.messages[0].startswith("Mods: "))
-        self.assertLessEqual(len(channel.messages[0]), 500)
+        self.assertEqual(
+            channel.messages,
+            [f"Mods: {bot_module.Config.DAGGERWALK_WEB_URL}/?tab=about#mods"],
+        )
+        self.assertEqual(bot_module.Config.COMMAND_ALIASES["mods"], "modlist")
 
     async def test_song_category_guidance_is_compact(self):
         channel = RecordingChannel()

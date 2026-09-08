@@ -103,6 +103,7 @@ class Config:
         "d": "down",
         "j": "jump",
         "hail": "renown",
+        "mods": "modlist",
     }
     HELP_COMMANDS = (
         "walk", "stop", "jump", "left", "right", "up", "down", "center",
@@ -144,7 +145,7 @@ class Config:
         "exit": "Start a vote to teleport outside the current building • Usage: !exit",
         "gravity": "Start a vote to set gravity from 0–20 • Usage: !gravity <0-20>",
         "playvid": "Start a vote to play a video numbered 0–15 • Usage: !playvid <0-15>",
-        "modlist": "List the active Daggerfall Unity mods • Usage: !modlist",
+        "modlist": "View active mods on the Daggerwalk website • Usage: !modlist",
         "shotgun": "Raise, fire, and lower the equipped shotgun • Usage: !shotgun",
         "camera": "Start a vote to toggle the third-person camera • Usage: !camera",
         "torch": "Toggle the player torch light • Usage: !torch",
@@ -215,14 +216,6 @@ class Config:
         "Automation"
     ]
     
-    ACTIVE_MODS = [
-        "World of Daggerfall", "Interesting Eroded Terrains",
-        "Wilderness Overhaul", "Basic Roads", "Dynamic Skies", "Real Grass",
-        "Birds in Daggerfall", "HUD Be Gone",  "Immersive Footsteps", "Eye of the Beholder", 
-        "Render Distance Expander", "Dynamic Ambience", "DIAAMM Part 1", "Animated Water",
-        "Seasons of the Iliac Bay",
-    ]
-
     WEATHER_TYPES_MAP = {
         "clear": 0,
         "cloudy": 1,
@@ -2685,10 +2678,12 @@ class DaggerfallBot(commands.Bot):
         )
     
     async def modlist(self):
-        """Display active mods"""
+        """Link to the canonical active mod list on the website."""
         logging.info("Executing modlist command")
         channel = self.connected_channels[0]
-        await channel.send(f"Mods: {', '.join(Config.ACTIVE_MODS)}")
+        await channel.send(
+            f"Mods: {Config.DAGGERWALK_WEB_URL}/?tab=about#mods"
+        )
 
     async def save_game(self):
         """Save game state"""
