@@ -352,7 +352,7 @@ class TorchCommandTests(unittest.IsolatedAsyncioTestCase):
         bot._save_torch_state = Mock()
         return bot
 
-    async def test_torch_toggles_game_command_state_and_feedback(self):
+    async def test_torch_toggles_game_command_state_without_feedback(self):
         channel = RecordingChannel()
         bot = self.make_bot(channel)
 
@@ -368,7 +368,7 @@ class TorchCommandTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertFalse(bot.state["torch"])
-        self.assertEqual(channel.messages, ["Torch: on", "Torch: off"])
+        self.assertEqual(channel.messages, [])
         self.assertEqual(bot._save_torch_state.call_count, 2)
 
     async def test_state_output_always_includes_torch(self):
@@ -403,6 +403,32 @@ class TorchCommandTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(changed)
         self.assertTrue(bot.state["torch"])
+        to_thread.assert_not_awaited()
+        bot._save_torch_state.assert_not_called()
+
+    async def test_torch_turns_on_automatically_at_night(self):
+        bot = self.make_bot()
+        bot.state["torch"] = False
+        data = {"date": "Tirdas, 12 Sun's Height, 3E 405, 18:00:00"}
+
+        with patch.object(bot_module.asyncio, "to_thread", AsyncMock()) as to_thread:
+            changed = await bot._maybe_turn_on_torch_at_night(data)
+
+        self.assertTrue(changed)
+        self.assertTrue(bot.state["torch"])
+        to_thread.assert_awaited_once_with(bot_module.send_game_input, ";")
+        bot._save_torch_state.assert_called_once_with()
+
+    async def test_torch_stays_off_before_night(self):
+        bot = self.make_bot()
+        bot.state["torch"] = False
+        data = {"date": "Tirdas, 12 Sun's Height, 3E 405, 17:59:59"}
+
+        with patch.object(bot_module.asyncio, "to_thread", AsyncMock()) as to_thread:
+            changed = await bot._maybe_turn_on_torch_at_night(data)
+
+        self.assertFalse(changed)
+        self.assertFalse(bot.state["torch"])
         to_thread.assert_not_awaited()
         bot._save_torch_state.assert_not_called()
 

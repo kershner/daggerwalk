@@ -1039,6 +1039,7 @@ class DaggerfallBot(commands.Bot):
                     logging.info(f"Detected new song: {song_display}")
 
                 await self._maybe_turn_off_torch_at_morning(data)
+                await self._maybe_turn_on_torch_at_night(data)
                 await self._maybe_update_stream_title(data)
                 await self._maybe_submit_quest_arrival(data)
 
@@ -1915,13 +1916,9 @@ class DaggerfallBot(commands.Bot):
         """Press BrightLight's toggle key and keep bot state synchronized."""
         async with self._game_ui():
             new_state = not bool(self.state.get("torch", False))
-            setting = "on" if new_state else "off"
             await asyncio.to_thread(send_game_input, ";")
             self._update_state("torch", new_state)
             self._save_torch_state()
-
-        if self.connected_channels:
-            await self.connected_channels[0].send(f"Torch: {setting}")
 
     async def _maybe_turn_off_torch_at_morning(self, data):
         """Turn off an enabled torch during the game's morning hours."""
@@ -1946,6 +1943,31 @@ class DaggerfallBot(commands.Bot):
             self._save_torch_state()
 
         logging.info("Torch automatically turned off for morning")
+        return True
+
+    async def _maybe_turn_on_torch_at_night(self, data):
+        """Turn on a disabled torch between 18:00 and 06:00 game time."""
+        if self.state.get("torch", False):
+            return False
+
+        _, _, time_str, _, _ = self._local_live_fields(data)
+        try:
+            hour = datetime.strptime(time_str, "%H:%M:%S").hour
+        except ValueError:
+            return False
+
+        if 6 <= hour < 18:
+            return False
+
+        async with self._game_ui():
+            # A chat command may have changed the torch while we waited for the UI.
+            if self.state.get("torch", False):
+                return False
+            await asyncio.to_thread(send_game_input, ";")
+            self._update_state("torch", True)
+            self._save_torch_state()
+
+        logging.info("Torch automatically turned on for night")
         return True
 
     async def bighop(self):
