@@ -240,6 +240,7 @@ class DevModeTests(unittest.IsolatedAsyncioTestCase):
             "crash_monitor",
             "side_effects_loop",
             "local_state_refresh_loop",
+            "stuck_check_loop",
             "movement_control_loop",
         ):
             setattr(bot, name, AsyncMock())
@@ -260,7 +261,6 @@ class DevModeTests(unittest.IsolatedAsyncioTestCase):
         response = Mock(status_code=201)
         response.json.return_value = {
             "progression": {"walkers": {}},
-            "command_state": {},
             "log": {"world_x": 10, "world_z": 20},
         }
 
@@ -309,6 +309,24 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
         send_key.assert_called_once_with(bot_module.GameKeys.CURSOR.value)
         click.assert_called_once_with()
         doubleclick.assert_called_once_with()
+
+    async def test_bighop_backs_up_fifteen_before_resuming_walk_and_jumping(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._movement = Mock()
+        bot._movement.add_translation.return_value = 1
+        bot._movement.translation_active = False
+        bot.send_movement = AsyncMock()
+
+        with patch.object(
+            bot_module.asyncio,
+            "to_thread",
+            AsyncMock(side_effect=[True, None]),
+        ) as to_thread:
+            await bot.bighop()
+
+        bot._movement.add_translation.assert_called_once_with(-15)
+        self.assertEqual(to_thread.await_args_list[-1].args, (bot_module.send_game_input, "\\"))
+        bot.send_movement.assert_awaited_once_with(bot_module.GameKeys.JUMP, repeat=10)
 
     async def test_center_sends_home_key(self):
         bot = object.__new__(bot_module.DaggerfallBot)
@@ -496,10 +514,9 @@ class HelpCommandTests(unittest.IsolatedAsyncioTestCase):
         bot._scheduled_progression.assert_awaited_once_with()
         self.assertEqual(bot._scheduled_message_index, 4)
 
-    async def test_scheduler_posts_help_before_first_interval(self):
+    async def test_scheduler_posts_help_and_starts_first_interval_immediately(self):
         bot = object.__new__(bot_module.DaggerfallBot)
         bot._state_ready = asyncio.Event()
-        bot._state_ready.set()
         bot._scheduled_message = AsyncMock()
 
         with patch.object(

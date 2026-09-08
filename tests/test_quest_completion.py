@@ -45,7 +45,6 @@ def make_bot(channel=None):
     bot._latest_response_data = None
     bot._latest_response_at = None
     bot._recent_world_positions = []
-    bot._latest_command_state = None
     bot._stuck_anchor_position = None
     bot._last_world_movement_at = None
     bot._autowalk_active = True
@@ -174,12 +173,12 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot._last_world_movement_at, 50)
         self.assertEqual(bot._stuck_anchor_position, (111.0, 200.0))
 
-    async def test_stuck_check_recovers_after_one_minute_without_server_call(self):
+    async def test_stuck_check_recovers_after_thirty_seconds_without_server_call(self):
         channel = RecordingChannel()
         bot = make_bot(channel)
         bot._bot_started_at_monotonic = 0
         bot._stuck_anchor_position = (100.0, 200.0)
-        bot._last_world_movement_at = 100
+        bot._last_world_movement_at = 130
         bot.log_chat_command = AsyncMock()
         bot.bighop = AsyncMock()
 
@@ -213,12 +212,11 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
 
         bot.bighop.assert_not_awaited()
 
-    async def test_background_refresh_sends_info_only_after_success(self):
+    async def test_background_refresh_updates_state_without_sending_info(self):
         bot = make_bot()
         bot._state_ready = asyncio.Event()
         bot.refresh_now = AsyncMock(return_value=True)
         bot.game_info = AsyncMock()
-        bot.check_if_bot_is_stuck = AsyncMock()
 
         with patch.object(
             bot_module.asyncio,
@@ -228,15 +226,14 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await bot.data_refresh_loop()
 
-        bot.game_info.assert_awaited_once()
+        bot.game_info.assert_not_awaited()
         self.assertTrue(bot._state_ready.is_set())
 
-    async def test_failed_background_refresh_does_not_send_info(self):
+    async def test_failed_background_refresh_does_not_mark_state_ready(self):
         bot = make_bot()
         bot._state_ready = asyncio.Event()
         bot.refresh_now = AsyncMock(return_value=False)
         bot.game_info = AsyncMock()
-        bot.check_if_bot_is_stuck = AsyncMock()
 
         with patch.object(
             bot_module.asyncio,

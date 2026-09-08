@@ -34,6 +34,12 @@ SOUNDVOLUMEVIEW_PATH = first_existing_path(
     r"C:\Daggerwalk\Utilities\SoundVolumeView\SoundVolumeView.exe",  # production
     r"C:\Daggerwalk\SoundVolumeView\SoundVolumeView.exe",            # local dev
 )
+SAVE_LOAD_WAIT_SECONDS = 45
+DEV_SAVE_LOAD_WAIT_SECONDS = SAVE_LOAD_WAIT_SECONDS / 2
+
+
+def save_load_wait_seconds(control_mode):
+    return DEV_SAVE_LOAD_WAIT_SECONDS if control_mode == "dev" else SAVE_LOAD_WAIT_SECONDS
 
 # Function to check if a process is running
 def is_process_running(process_name):
@@ -43,7 +49,7 @@ def is_process_running(process_name):
     return False
 
 # Function to terminate a process by name
-def start_daggerfall():
+def start_daggerfall(control_mode="twitch"):
     """
     Launches Daggerfall Unity and performs initial setup.
     Writes READY_FLAG when DFU is confirmed staged and ready.
@@ -83,7 +89,9 @@ def start_daggerfall():
 
         logging.info("Loading last save...")
         pyautogui.press("enter")
-        time.sleep(45)  # Allow save to load fully
+        load_wait = save_load_wait_seconds(control_mode)
+        logging.info("Waiting %.1fs for the save to load...", load_wait)
+        time.sleep(load_wait)
 
         time.sleep(1)
         pyautogui.press("`")  # Open the console (tilde key)
@@ -203,7 +211,7 @@ def wait_for_daggerfall_ready(timeout=240):
         time.sleep(1)
     return False
 
-def ensure_dfu_ready(timeout=240):
+def ensure_dfu_ready(timeout=240, control_mode="twitch"):
     # Clear stale flag, (re)start DFU if not running, then wait for readiness
     try:
         READY_FLAG.unlink(missing_ok=True)
@@ -211,7 +219,7 @@ def ensure_dfu_ready(timeout=240):
         pass
 
     if not is_process_running("DaggerfallUnity.exe"):
-        start_daggerfall()
+        start_daggerfall(control_mode)
     else:
         # If already running, make sure the flag exists so the wait doesn't stall
         try:
@@ -245,7 +253,7 @@ def run_control_supervised(control_mode):
 
     while True:
         # Both modes pass through the same game startup/readiness gate.
-        ensure_dfu_ready(timeout=240)
+        ensure_dfu_ready(timeout=240, control_mode=control_mode)
 
         logging.info(f"Launching {label}...")
         process = subprocess.Popen(command, cwd=base, creationflags=flags)

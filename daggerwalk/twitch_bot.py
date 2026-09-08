@@ -70,7 +70,8 @@ class Config:
     BOT_USERNAME = "daggerwalk_bot"
     REFRESH_INTERVAL = 300  # 5 minutes
     LOCAL_STATE_REFRESH_INTERVAL = 30  # seconds
-    STUCK_INACTIVITY_SECONDS = 60
+    STUCK_SAMPLE_INTERVAL = 5  # seconds
+    STUCK_INACTIVITY_SECONDS = 30
     STUCK_TOLERANCE = 10  # world-coordinate units
     TWITCH_TITLE_MIN_INTERVAL = 60  # seconds
     AUTOSAVE_INTERVAL = 600  # 10 minutes
@@ -84,6 +85,7 @@ class Config:
     MOUSE_STEP_PIXELS = 20
     MAX_PENDING_MOUSE_PIXELS = 5000
     MAX_PENDING_TRANSLATION_SECONDS = 10.0
+    BIGHOP_BACK_AMOUNT = 15
     COMMAND_ALIASES = {
         "w": "walk",
         "s": "stop",
@@ -487,7 +489,6 @@ class DaggerfallBot(commands.Bot):
         self._latest_response_data = None
         self._latest_response_at = None
         self._recent_world_positions = []
-        self._latest_command_state = None
         self._stuck_anchor_position = None
         self._last_world_movement_at = None
         self._autowalk_active = True
@@ -607,6 +608,7 @@ class DaggerfallBot(commands.Bot):
         self.crash_monitor_task = asyncio.create_task(self.crash_monitor())
         self.side_effects_task = asyncio.create_task(self.side_effects_loop())
         self.local_state_refresh_task = asyncio.create_task(self.local_state_refresh_loop())  
+        self.stuck_check_task = asyncio.create_task(self.stuck_check_loop())
         self.movement_control_task = asyncio.create_task(self.movement_control_loop())
 
     async def movement_control_loop(self):
@@ -654,11 +656,11 @@ class DaggerfallBot(commands.Bot):
         except Exception as e:
             logging.error(f"periodic message error: {e}")
 
-        # Later slots use game data, so wait for the first successful refresh.
-        await self._state_ready.wait()
-
         while True:
             await asyncio.sleep(Config.SCHEDULED_MESSAGE_INTERVAL)
+            # Later slots use game data. Normally this is ready long before the
+            # first interval, but do not emit incomplete information if it is not.
+            await self._state_ready.wait()
             try:
                 await self._scheduled_message()
             except Exception as e:
@@ -738,7 +740,6 @@ class DaggerfallBot(commands.Bot):
                     if not first_success:
                         first_success = True
                         self._state_ready.set()  # unblocks scheduler/commands that want initial state
-                    await self.game_info()
 
             except Exception as e:
                 logging.error(f"data_refresh_loop error: {e}")
@@ -1031,8 +1032,6 @@ class DaggerfallBot(commands.Bot):
         while True:
             try:
                 data = await self.get_map_json_data()
-                self._record_local_world_position(data)
-                await self.check_if_bot_is_stuck()
                 new_song_name = data.get("currentSong")
 
                 if new_song_name and new_song_name != last_song:
@@ -1050,6 +1049,19 @@ class DaggerfallBot(commands.Bot):
                 logging.error(f"local_state_refresh_loop error: {e}")
 
             await asyncio.sleep(Config.LOCAL_STATE_REFRESH_INTERVAL)
+
+    async def stuck_check_loop(self):
+        """Sample local position frequently enough to honor the inactivity threshold."""
+        logging.info("Starting local stuck-check loop")
+        while True:
+            try:
+                data = await self.get_map_json_data()
+                self._record_local_world_position(data)
+                await self.check_if_bot_is_stuck()
+            except Exception as e:
+                logging.error(f"stuck_check_loop error: {e}")
+
+            await asyncio.sleep(Config.STUCK_SAMPLE_INTERVAL)
 
     @staticmethod
     def _normalized_location(value):
@@ -1120,7 +1132,6 @@ class DaggerfallBot(commands.Bot):
                     await self._check_and_announce_quest_completion(new_data)
                     self._latest_response_data = new_data
                     self._latest_response_at = datetime.now(timezone.utc)
-                    self._latest_command_state = new_data.get("command_state")
                     return True
             except Exception:
                 logging.exception("refresh_now error")
@@ -1947,7 +1958,7 @@ class DaggerfallBot(commands.Bot):
         logging.info("Executing BIGHOP command")
         if not await asyncio.to_thread(focus_game_window):
             return
-        generation = self._movement.add_translation(-Config.MAX_INPUT_REPEATS)
+        generation = self._movement.add_translation(-Config.BIGHOP_BACK_AMOUNT)
         while self._movement.translation_active:
             if generation != self._movement.generation:
                 return
