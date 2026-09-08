@@ -3,7 +3,6 @@ setlocal
 
 set "DAGGERWALK_ROOT=%~dp0"
 if not defined DAGGERWALK_SITE_DIR set "DAGGERWALK_SITE_DIR=C:\Programming\kershner_org"
-if not defined DAGGERWALK_DEV_USER set "DAGGERWALK_DEV_USER=DemoWalker10"
 if not "%~1"=="" set "DAGGERWALK_DEV_USER=%~1"
 set "DAGGERWALK_DEV_SERVER=http://127.0.0.1:8000"
 
@@ -40,8 +39,6 @@ if errorlevel 1 (
 pushd "%DAGGERWALK_SITE_DIR%"
 set "DJANGO_SETTINGS_MODULE=site_config.settings.dev"
 call .\venv\Scripts\python.exe manage.py migrate
-if errorlevel 1 goto :failed
-call .\venv\Scripts\python.exe manage.py seed_progression_demo
 if errorlevel 1 goto :failed
 
 start "Daggerwalk Django" cmd /k ".\venv\Scripts\python.exe manage.py runserver 127.0.0.1:8000"
