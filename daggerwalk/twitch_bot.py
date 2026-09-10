@@ -8,6 +8,7 @@ import pyautogui
 import aiofiles
 import requests
 import random
+import re
 import logging
 from logging.handlers import RotatingFileHandler
 import aiohttp
@@ -19,6 +20,7 @@ import os
 import ctypes
 import math
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from urllib.parse import urlparse
 
 from .herald import format_herald
@@ -36,6 +38,9 @@ from .paths import (
     READY_FLAG,
     ensure_runtime_dir,
 )
+
+
+_command_feedback_user = ContextVar("command_feedback_user", default=None)
 
 ensure_runtime_dir()
 logging.basicConfig(
@@ -661,13 +666,16 @@ class DaggerfallBot(commands.Bot):
         finally:
             self._movement.cancel_all()
 
-    def _start_command_task(self, name, command_factory):
+    def _start_command_task(self, name, command_factory, username=None):
         """Launch an ordinary command without blocking Twitch message handling."""
         async def run_command():
+            token = _command_feedback_user.set(username)
             try:
                 await command_factory()
             except Exception:
                 logging.exception(f"Command !{name} failed")
+            finally:
+                _command_feedback_user.reset(token)
 
         task = asyncio.create_task(run_command())
         self._active_command_tasks.add(task)
@@ -1253,7 +1261,11 @@ class DaggerfallBot(commands.Bot):
         args = parts[1:] if len(parts) > 1 else []
 
         if not getattr(self, "_runtime_ready", True):
-            await message.channel.send(Config.STARTUP_COMMAND_RESPONSE)
+            await self._send_feedback(
+                message.channel,
+                Config.STARTUP_COMMAND_RESPONSE,
+                message.author.name,
+            )
             return
 
         # Qualifying commands are uploaded with the next game-state snapshot.
@@ -1263,10 +1275,18 @@ class DaggerfallBot(commands.Bot):
         # Handle voting commands
         if command in self.votable_commands:
             if self.voting_active:
-                await message.channel.send("A vote is already in progress!")
+                await self._send_feedback(
+                    message.channel,
+                    "A vote is already in progress!",
+                    message.author.name,
+                )
                 return
             if command == "song" and not self.validate_song_arg(args)[0]:
-                await message.channel.send(self.validate_song_arg(args)[1])
+                await self._send_feedback(
+                    message.channel,
+                    self.validate_song_arg(args)[1],
+                    message.author.name,
+                )
                 return
             await self.start_vote(message, command)
             return
@@ -1311,7 +1331,11 @@ class DaggerfallBot(commands.Bot):
         }
 
         if command in command_map:
-            self._start_command_task(command, command_map[command])
+            self._start_command_task(
+                command,
+                command_map[command],
+                message.author.name,
+            )
 
     def _is_qualifying_invocation(self, command, args):
         if command not in Config.QUALIFYING_COMMANDS:
@@ -1363,7 +1387,39 @@ class DaggerfallBot(commands.Bot):
         return True
 
     def _cached_profile(self, username):
-        return (self._progression.get("profiles") or {}).get(username.lstrip("@").casefold())
+        progression = getattr(self, "_progression", {})
+        return (progression.get("profiles") or {}).get(username.lstrip("@").casefold())
+
+    def _feedback(self, username, text):
+        """Address titled viewers naturally at the end of command feedback."""
+        profile = self._cached_profile(username) or {}
+        guild_title = (profile.get("guild") or {}).get("title")
+        title = guild_title or profile.get("renown_title")
+        if not title:
+            return text
+
+        # Older progression replies already begin with the viewer's handle.
+        # Remove that prefix so the shared suffix does not address them twice.
+        body = re.sub(
+            rf"^@{re.escape(username)}(?:\s+—|,)\s*",
+            "",
+            str(text).strip(),
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        punctuation = body[-1] if body[-1:] in ".!?" else "."
+        if body[-1:] in ".!?":
+            body = body[:-1]
+        suffix = f", {title} @{username}{punctuation}"
+        max_body_length = 480 - len(suffix)
+        if len(body) > max_body_length:
+            body = body[:max_body_length - 1].rstrip() + "…"
+        return f"{body}{suffix}"
+
+    async def _send_feedback(self, channel, text, username=None):
+        username = username or _command_feedback_user.get()
+        output = self._feedback(username, text) if username else text
+        await channel.send(output)
 
     @staticmethod
     def _renown_text(profile):
@@ -1381,7 +1437,7 @@ class DaggerfallBot(commands.Bot):
         if not self._read_allowed("renown", message.author.name, Config.READ_USER_COOLDOWN, Config.READ_GLOBAL_COOLDOWN):
             return
         text = self._renown_text(self._cached_profile(username))
-        await message.channel.send(text or f"@{message.author.name}, no Chronicle exists for that walker yet. Complete a quest to become a Wayfarer.")
+        await self._send_feedback(message.channel, text or f"@{message.author.name}, no Chronicle exists for that walker yet. Complete a quest to become a Wayfarer.")
 
     async def guild(self, message, args):
         username = message.author.name
@@ -1392,7 +1448,7 @@ class DaggerfallBot(commands.Bot):
             return
         profile = self._cached_profile(username)
         if not profile:
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 f"@{username} — Guilds unlock after your first quest • Join: !guild join "
                 f"• Guild Hall: {Config.DAGGERWALK_WEB_URL}/guilds/"
             )
@@ -1405,33 +1461,33 @@ class DaggerfallBot(commands.Bot):
                 if guild else
                 "Unaffiliated • Join: !guild join"
             )
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 f"@{username} — {text} • Guild Hall: {Config.DAGGERWALK_WEB_URL}/guilds/"
             )
             return
         if action in {"join", "leave"}:
             cooldown = self._guild_cooldown_text(profile)
             if cooldown:
-                await message.channel.send(
+                await self._send_feedback(message.channel,
                     f"@{username} — Guild changes are on cooldown {cooldown}."
                 )
                 return
         if action == "join":
             guilds = self._progression.get("guilds") or {}
             if len(args) != 2 or args[1].casefold() not in guilds:
-                await message.channel.send(
+                await self._send_feedback(message.channel,
                     f"@{username} — Choose a guild: {self._guild_choices_text() or 'none available'} "
                     "• Usage: !guild join <guild>"
                 )
                 return
             if (profile.get("guild") or {}).get("key") == args[1].casefold():
-                await message.channel.send(
+                await self._send_feedback(message.channel,
                     f"@{username} — You already serve the {guilds[args[1].casefold()]['name']} • Status: !guild"
                 )
                 return
         if action == "leave":
             if not profile.get("guild"):
-                await message.channel.send(
+                await self._send_feedback(message.channel,
                     f"@{username}, you are already unaffiliated. Use !guild join to see the four guild choices."
                 )
                 return
@@ -1441,12 +1497,12 @@ class DaggerfallBot(commands.Bot):
             target = args[1].casefold()
             wording = f"Join the {self._progression['guilds'][target]['name']}?"
         else:
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 "Unknown guild command • Usage: !guild [join [guild]|leave|confirm|cancel]"
             )
             return
         self._pending_progression_actions[username.casefold()] = {"kind": "guild", "guild": target, "expires": time.monotonic() + Config.CONFIRMATION_SECONDS}
-        await message.channel.send(
+        await self._send_feedback(message.channel,
             f"@{username} — {wording} Starts a {Config.GUILD_COOLDOWN_DAYS}-day cooldown • "
             f"Confirm within {Config.CONFIRMATION_SECONDS}s: "
             "!guild confirm • !guild cancel"
@@ -1488,7 +1544,7 @@ class DaggerfallBot(commands.Bot):
             return
         profile = self._cached_profile(username)
         if not profile:
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 f"@{username} — Monuments unlock after your first quest. Each token creates one permanent map location "
                 f"where the Walker stands • Registry: {Config.DAGGERWALK_WEB_URL}/monuments/"
             )
@@ -1501,7 +1557,7 @@ class DaggerfallBot(commands.Bot):
             if len(args) == 2 and args[1].casefold() == "more":
                 await self._send_monument_types(message, profile, monument_types, more=True)
                 return
-            await message.channel.send("Usage: !monument types [more]")
+            await self._send_feedback(message.channel, "Usage: !monument types [more]")
             return
         if action in monument_types and len(args) == 1:
             monument_type = action
@@ -1510,31 +1566,31 @@ class DaggerfallBot(commands.Bot):
         if monument_type:
             type_data = monument_types.get(monument_type)
             if not type_data:
-                await message.channel.send("Unknown monument type. Use !monument types to see your available choices.")
+                await self._send_feedback(message.channel, "Unknown monument type. Use !monument types to see your available choices.")
                 return
             if profile["xp"] < type_data["required_xp"] or profile.get("tokens_available", 0) < 1:
-                await message.channel.send(
+                await self._send_feedback(message.channel,
                     f"@{username}, placing {type_data['emoji']} {type_data['label']} requires "
                     f"{type_data['required_title']} Renown and 1 available Monument Token. Nothing was spent."
                 )
                 return
             state = await self.get_map_json_data()
             if str(state.get("locationType", "")).casefold() not in {"wilderness", "town"}:
-                await message.channel.send(f"@{username}, monuments can only be placed in the wilderness or a town.")
+                await self._send_feedback(message.channel, f"@{username}, monuments can only be placed in the wilderness or a town.")
                 return
             state["capturedAt"] = datetime.now(timezone.utc).isoformat()
             proposed_name = self._local_monument_name(username, type_data["label"], state)
             self._pending_progression_actions[username.casefold()] = {"kind": "monument", "monument_type": monument_type, "state": state, "expires": time.monotonic() + Config.CONFIRMATION_SECONDS}
-            await message.channel.send(f"@{username}, place {type_data['emoji']} {proposed_name} in {state.get('region')}? This permanently spends 1 token. Confirm within {Config.CONFIRMATION_SECONDS}s: !monument confirm")
+            await self._send_feedback(message.channel, f"@{username}, place {type_data['emoji']} {proposed_name} in {state.get('region')}? This permanently spends 1 token. Confirm within {Config.CONFIRMATION_SECONDS}s: !monument confirm")
             return
         if args:
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 "Unknown monument type. Use !monument types to see your available choices."
             )
             return
         tokens_available = profile.get("tokens_available", 0)
         token_word = "Token" if tokens_available == 1 else "Tokens"
-        await message.channel.send(
+        await self._send_feedback(message.channel,
             f"@{username} — {tokens_available} Monument {token_word} • "
             f"{profile.get('monuments_placed', 0)} placed • Next token: {profile.get('next_token_xp')} XP "
             f"• Place here: !monument types → !monument <type> • Registry: {Config.DAGGERWALK_WEB_URL}/monuments/"
@@ -1547,7 +1603,7 @@ class DaggerfallBot(commands.Bot):
             if profile["xp"] >= item["required_xp"]:
                 groups.setdefault(item["required_title"], []).append(key)
         if not groups:
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 f"@{profile['username']}, monument types unlock at Pathfinder Renown."
             )
             return
@@ -1568,7 +1624,7 @@ class DaggerfallBot(commands.Bot):
 
         selected = samples.get(username_key)
         if not selected:
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 f"@{profile['username']} — Start with !monument types to draw your choices."
             )
             return
@@ -1578,7 +1634,7 @@ class DaggerfallBot(commands.Bot):
         }
         remaining = {title: names for title, names in remaining.items() if names}
         if not remaining:
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 f"@{profile['username']} — No other unlocked types • Place: !monument <type>"
             )
             return
@@ -1586,8 +1642,7 @@ class DaggerfallBot(commands.Bot):
             message, remaining, " • Place: !monument <type>"
         )
 
-    @staticmethod
-    async def _send_monument_type_groups(message, groups, footer):
+    async def _send_monument_type_groups(self, message, groups, footer):
         """Format grouped monument choices into Twitch-sized messages."""
         messages = []
         current = "🏛️ "
@@ -1605,7 +1660,7 @@ class DaggerfallBot(commands.Bot):
                     current += addition
         messages.append(current + footer)
         for text in messages:
-            await message.channel.send(text)
+            await self._send_feedback(message.channel, text)
 
     async def _handle_pending_progression_action(self, message, action, kind, label):
         if action not in {"confirm", "cancel"}:
@@ -1615,10 +1670,10 @@ class DaggerfallBot(commands.Bot):
         pending = self._pending_progression_actions.get(key)
         if not pending or pending["expires"] < time.monotonic() or pending["kind"] != kind:
             self._pending_progression_actions.pop(key, None)
-            await message.channel.send(f"@{username}, there is no pending {label}.")
+            await self._send_feedback(message.channel, f"@{username}, there is no pending {label}.")
         elif action == "cancel":
             self._pending_progression_actions.pop(key)
-            await message.channel.send(f"@{username}, {label} cancelled.")
+            await self._send_feedback(message.channel, f"@{username}, {label} cancelled.")
         else:
             await self._confirm_progression_action(message, pending)
         return True
@@ -1650,10 +1705,10 @@ class DaggerfallBot(commands.Bot):
             body = response.json()
         except Exception:
             logging.exception("Progression confirmation failed")
-            await message.channel.send(f"@{username}, the server could not confirm that change. Nothing was spent or changed; please try later.")
+            await self._send_feedback(message.channel, f"@{username}, the server could not confirm that change. Nothing was spent or changed; please try later.")
             return
         if response.status_code not in {200, 201}:
-            await message.channel.send(f"@{username}, {body.get('message', 'that change could not be completed')}")
+            await self._send_feedback(message.channel, f"@{username}, {body.get('message', 'that change could not be completed')}")
             return
         self._pending_progression_actions.pop(username.casefold(), None)
         profile = body.get("profile")
@@ -1674,11 +1729,11 @@ class DaggerfallBot(commands.Bot):
         if pending["kind"] == "guild":
             guild = profile.get("guild") if profile else None
             text = f"now serves the {guild['emoji']} {guild['name']} as {guild['title']}" if guild else "is now unaffiliated"
-            await message.channel.send(f"📜 {username} {text}. The {Config.GUILD_COOLDOWN_DAYS}-day allegiance cooldown has begun.")
+            await self._send_feedback(message.channel, f"📜 {username} {text}. The {Config.GUILD_COOLDOWN_DAYS}-day allegiance cooldown has begun.")
         else:
             monument = body["monument"]
             map_link = f"{Config.DAGGERWALK_WEB_URL}/?monument={monument['id']}"
-            await message.channel.send(
+            await self._send_feedback(message.channel,
                 f"🏛️ {monument['name']} now stands permanently in the Iliac Bay. "
                 f"{monument['description']} 🗺️ Map: {map_link}"
             )
@@ -1767,7 +1822,7 @@ class DaggerfallBot(commands.Bot):
         self._autowalk_active = True
         self._last_world_movement_at = time.monotonic()
         await self.send_movement(GameKeys.WALK)
-        await channel.send("Autowalk toggled.")
+        await self._send_feedback(channel, "Autowalk enabled.")
 
     async def stop_movement(self, channel):
         """Cancel pending/held movement immediately and stop the autowalk mod."""
@@ -1775,7 +1830,7 @@ class DaggerfallBot(commands.Bot):
         self._movement.cancel_all()
         async with self._game_ui():
             await asyncio.to_thread(send_game_input, GameKeys.BACK.value, 1, 0.1)
-        await channel.send("All movement stopped.")
+        await self._send_feedback(channel, "All movement stopped.")
 
     async def toggle_cursor(self):
         async with self._game_ui():
@@ -1842,7 +1897,11 @@ class DaggerfallBot(commands.Bot):
 
     async def start_vote(self, message, vote_type):
         if self.voting_active:
-            await message.channel.send("A vote is already in progress!")
+            await self._send_feedback(
+                message.channel,
+                "A vote is already in progress!",
+                message.author.name,
+            )
             return
 
         # Special handling to validate command args
@@ -1851,8 +1910,10 @@ class DaggerfallBot(commands.Bot):
             if args and args[0].lower() == "category":
                 # If only "category" is provided without specific categories
                 if len(args) == 1:
-                    await message.channel.send(
-                        "Categories: world|dungeon|misc|battle|all|off • Usage: !song category <category...>"
+                    await self._send_feedback(
+                        message.channel,
+                        "Categories: world|dungeon|misc|battle|all|off • Usage: !song category <category...>",
+                        message.author.name,
                     )
                     return
                 # If they provided categories, proceed with vote for category shuffle
@@ -1861,28 +1922,32 @@ class DaggerfallBot(commands.Bot):
             else:
                 # For regular song commands, validate as before
                 if not self.validate_song_arg(args)[0]:
-                    await message.channel.send(self.validate_song_arg(args)[1])
+                    await self._send_feedback(
+                        message.channel,
+                        self.validate_song_arg(args)[1],
+                        message.author.name,
+                    )
                     return
         elif vote_type == "weather":
             args = message.content.split()[1:] if len(message.content.split()) > 1 else []
             if not self.validate_weather_arg(args)[0]:
-                await message.channel.send(self.validate_weather_arg(args)[1])
+                await self._send_feedback(message.channel, self.validate_weather_arg(args)[1], message.author.name)
                 return
         elif vote_type == "levitate":
             args = message.content.split()[1:] if len(message.content.split()) > 1 else []
             if not self.validate_levitate_args(args)[0]:
-                await message.channel.send(self.validate_levitate_args(args)[1])
+                await self._send_feedback(message.channel, self.validate_levitate_args(args)[1], message.author.name)
                 return
         elif vote_type == "gravity":
             args = message.content.split()[1:] if len(message.content.split()) > 1 else []
             if not self.validate_gravity_args(args)[0]:
-                await message.channel.send(self.validate_gravity_args(args)[1])
+                await self._send_feedback(message.channel, self.validate_gravity_args(args)[1], message.author.name)
                 return
         elif vote_type == "playvid":
             args = message.content.split()[1:] if len(message.content.split()) > 1 else []
             ok, msg = self.validate_playvid_args(args)
             if not ok:
-                await message.channel.send(msg)
+                await self._send_feedback(message.channel, msg, message.author.name)
                 return
 
         logging.info(f"Starting vote for {vote_type}")
@@ -1896,7 +1961,11 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         # Update the message to show initial vote count
-        await channel.send(f"🗳️ Vote started for:【{self.votable_commands[vote_type]}】- Use !yes or !no - {Config.VOTING_DURATION} seconds (Yes: 1 | No: 0)")
+        await self._send_feedback(
+            channel,
+            f"🗳️ Vote started for:【{self.votable_commands[vote_type]}】- Use !yes or !no - {Config.VOTING_DURATION} seconds (Yes: 1 | No: 0)",
+            message.author.name,
+        )
         self.voting_task = asyncio.create_task(self.end_vote_timer(channel))
 
     async def cast_vote(self, username, vote):
@@ -1909,7 +1978,11 @@ class DaggerfallBot(commands.Bot):
         no_votes = sum(1 for v in self.votes.values() if v == "no")
         
         channel = self.connected_channels[0]
-        await channel.send(f"Votes for:【{self.votable_commands[self.current_vote_type]}】- Yes: {yes_votes} | No: {no_votes}")
+        await self._send_feedback(
+            channel,
+            f"Votes for:【{self.votable_commands[self.current_vote_type]}】- Yes: {yes_votes} | No: {no_votes}",
+            username,
+        )
 
     async def end_vote_timer(self, channel):
         await asyncio.sleep(Config.VOTING_DURATION)
@@ -1921,10 +1994,19 @@ class DaggerfallBot(commands.Bot):
         no_votes = sum(1 for v in self.votes.values() if v == "no")
         
         logging.info(f"Vote ended for {self.current_vote_type} - Yes: {yes_votes}, No: {no_votes}")
-        await channel.send(f"✅ Vote ended for:【{self.votable_commands[self.current_vote_type]}】- Yes: {yes_votes} | No: {no_votes}")
+        username = self.current_vote_message.author.name
+        await self._send_feedback(
+            channel,
+            f"✅ Vote ended for:【{self.votable_commands[self.current_vote_type]}】- Yes: {yes_votes} | No: {no_votes}",
+            username,
+        )
         
         if yes_votes > no_votes:
-            await self.execute_voted_command()
+            token = _command_feedback_user.set(username)
+            try:
+                await self.execute_voted_command()
+            finally:
+                _command_feedback_user.reset(token)
         
         self.voting_active = False
         self.current_vote_type = None
@@ -2101,7 +2183,7 @@ class DaggerfallBot(commands.Bot):
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        await channel.send('Song changed!')
+        await self._send_feedback(channel, 'Song changed!')
         track_id = getattr(self, "_track_map", {}).get(str(choice), None)
         song_display = f"{choice} (Track {track_id})" if track_id is not None else str(choice)
         self._update_state("song", song_display)
@@ -2118,7 +2200,7 @@ class DaggerfallBot(commands.Bot):
         
         channel = self.connected_channels[0]
         categories_str_display = ", ".join(categories)
-        await channel.send(f'Song shuffle categories changed to: {categories_str_display}!')
+        await self._send_feedback(channel, f'Song shuffle categories changed to: {categories_str_display}!')
         self._update_state("song_category", categories_str_display.lower())
 
     async def weather(self, weather_choice):
@@ -2132,7 +2214,7 @@ class DaggerfallBot(commands.Bot):
         channel = self.connected_channels[0]
         weather_emoji = Config.WEATHER_EMOJIS.get(weather_choice.title(), "🌈")
         weather_display = Config.get_weather_display(weather_choice)
-        await channel.send(f'Weather changed to: {weather_emoji}{weather_display}!')
+        await self._send_feedback(channel, f'Weather changed to: {weather_emoji}{weather_display}!')
 
     async def levitate(self, levitate_choice):
         """Toggle levitatation on/off"""
@@ -2143,7 +2225,7 @@ class DaggerfallBot(commands.Bot):
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        await channel.send(f'Levitate set to: {levitate_choice}!')
+        await self._send_feedback(channel, f'Levitate set to: {levitate_choice}!')
         self._update_state("levitate", levitate_choice.lower())
 
     async def toggle_enemy_ai(self):
@@ -2153,7 +2235,7 @@ class DaggerfallBot(commands.Bot):
         await asyncio.sleep(5)
 
         if self.connected_channels:
-            await self.connected_channels[0].send("Toggled enemy AI!")
+            await self._send_feedback(self.connected_channels[0], "Toggled enemy AI!")
         self._update_state(
             "ai_enabled", not self.state.get("ai_enabled", True)
         )
@@ -2167,7 +2249,7 @@ class DaggerfallBot(commands.Bot):
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        await channel.send("Teleported outside of current building, or did nothing if already outside.")
+        await self._send_feedback(channel, "Teleported outside of current building, or did nothing if already outside.")
 
     async def set_gravity(self, gravity_level):
         """Set gravity level (0–20)"""
@@ -2178,7 +2260,7 @@ class DaggerfallBot(commands.Bot):
         await asyncio.sleep(5)
         
         channel = self.connected_channels[0]
-        await channel.send(f'Gravity set to: {gravity_level}!')
+        await self._send_feedback(channel, f'Gravity set to: {gravity_level}!')
         self._update_state("gravity", int(gravity_level))
 
     async def playvid(self, idx_str: str):
@@ -2219,7 +2301,7 @@ class DaggerfallBot(commands.Bot):
         except Exception as e:
             logging.error(f"playvid error: {e}")
             if self.connected_channels:
-                await self.connected_channels[0].send("Failed to play that video.")
+                await self._send_feedback(self.connected_channels[0], "Failed to play that video.")
 
     async def killall(self):
         """Kill all enemies"""
@@ -2465,12 +2547,12 @@ class DaggerfallBot(commands.Bot):
             )):
                 ok = await self.refresh_now()
                 if not ok and self.connected_channels:
-                    await self.connected_channels[0].send("No info yet. Gathering data…")
+                    await self._send_feedback(self.connected_channels[0], "No info yet. Gathering data…")
                     return
 
             if use_local and not local_data and not self._latest_response_data:
                 if self.connected_channels:
-                    await self.connected_channels[0].send("No local game info is available yet.")
+                    await self._send_feedback(self.connected_channels[0], "No local game info is available yet.")
                 return
 
             # Cache music tracks if needed
@@ -2577,7 +2659,7 @@ class DaggerfallBot(commands.Bot):
             last_m = getattr(self, "_last_info_sent_at", 0.0)
             if now_m - last_m >= 3.5:
                 if self.connected_channels:
-                    await self.connected_channels[0].send(status)
+                    await self._send_feedback(self.connected_channels[0], status)
                 self._last_info_sent_at = now_m
             else:
                 logging.info("Suppressed duplicate !info within debounce window")
@@ -2698,18 +2780,18 @@ class DaggerfallBot(commands.Bot):
             command = Config.COMMAND_ALIASES.get(requested, requested)
             detail = Config.COMMAND_HELP.get(command)
             if not detail:
-                await channel.send(f"Unknown command: !{requested}. Use !help for the command list.")
+                await self._send_feedback(channel, f"Unknown command: !{requested}. Use !help for the command list.")
                 return
             aliases = [
                 f"!{alias}" for alias, target in Config.COMMAND_ALIASES.items()
                 if target == command
             ]
             suffix = f" • Aliases: {', '.join(aliases)}" if aliases else ""
-            await channel.send(f"!{command}: {detail}{suffix}")
+            await self._send_feedback(channel, f"!{command}: {detail}{suffix}")
             return
 
         commands_text = " • ".join(f"!{command}" for command in Config.HELP_COMMANDS)
-        await channel.send(
+        await self._send_feedback(channel,
             f"💀Daggerwalk Commands: {commands_text} "
             "• Details: !help <command>"
         )
@@ -2719,7 +2801,7 @@ class DaggerfallBot(commands.Bot):
         logging.info("Executing more commands")
         channel = self.connected_channels[0]
         commands_text = " • ".join(f"!{command}" for command in Config.MORE_COMMANDS)
-        await channel.send(
+        await self._send_feedback(channel,
             f"🗡️More Daggerwalk Commands: {commands_text} • Details: !help <command>"
         )
     
@@ -2727,7 +2809,7 @@ class DaggerfallBot(commands.Bot):
         """Link to the canonical active mod list on the website."""
         logging.info("Executing modlist command")
         channel = self.connected_channels[0]
-        await channel.send(
+        await self._send_feedback(channel,
             f"Mods: {Config.DAGGERWALK_WEB_URL}/?tab=about#mods"
         )
 
@@ -2744,7 +2826,7 @@ class DaggerfallBot(commands.Bot):
     async def exec_command(self, args):
         """Execute console command (admin only)"""
         if not args:
-            await self.connected_channels[0].send("Usage: !exec <command> [args]")
+            await self._send_feedback(self.connected_channels[0], "Usage: !exec <command> [args]")
             return
         logging.info(f"Executing admin command: {' '.join(args)}")
         await self.send_console_command(" ".join(args))
@@ -2847,7 +2929,7 @@ class DaggerfallBot(commands.Bot):
                 ok = await self.refresh_now()
                 if not ok:
                     if self.connected_channels:
-                        await self.connected_channels[0].send("No quest info available yet.")
+                        await self._send_feedback(self.connected_channels[0], "No quest info available yet.")
                     return
 
             active_quests, _ = self._get_quests_from_response(self._latest_response_data)
@@ -2855,21 +2937,21 @@ class DaggerfallBot(commands.Bot):
             if self.connected_channels:
                 if args:
                     if len(args) != 1 or args[0] not in ("1", "2", "3"):
-                        await self.connected_channels[0].send("Usage: !quest [1-3]")
+                        await self._send_feedback(self.connected_channels[0], "Usage: !quest [1-3]")
                         return
                     slot = int(args[0])
                     selected = next((quest for quest in active_quests if quest.get("slot") == slot), None)
                     if not selected:
-                        await self.connected_channels[0].send(f"Quest slot {slot} is not active yet.")
+                        await self._send_feedback(self.connected_channels[0], f"Quest slot {slot} is not active yet.")
                         return
-                    await self.connected_channels[0].send(self._format_quest_detail(selected))
+                    await self._send_feedback(self.connected_channels[0], self._format_quest_detail(selected))
                 else:
-                    await self.connected_channels[0].send(self._format_quest_summary(active_quests))
+                    await self._send_feedback(self.connected_channels[0], self._format_quest_summary(active_quests))
 
         except Exception as e:
             logging.error(f"!quest error: {e}")
             if self.connected_channels:
-                await self.connected_channels[0].send("Failed to fetch quest info.")
+                await self._send_feedback(self.connected_channels[0], "Failed to fetch quest info.")
 
     async def show_state(self):
         """Display current local bot state in plain format."""
@@ -2898,7 +2980,7 @@ class DaggerfallBot(commands.Bot):
 
             msg = " • ".join(parts) if parts else "No state values set yet."
             if self.connected_channels:
-                await self.connected_channels[0].send(msg)
+                await self._send_feedback(self.connected_channels[0], msg)
             logging.info(f"Displayed state: {msg}")
         except Exception as e:
             logging.error(f"show_state error: {e}")

@@ -111,6 +111,7 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         bot = object.__new__(bot_module.DaggerfallBot)
         bot.votable_commands = {"song": "change the song", "weather": "change weather"}
         bot.voting_active = True
+        bot._progression = {"profiles": {}}
         return bot
 
     async def test_busy_vote_rejects_another_votable_before_argument_validation(self):
@@ -138,7 +139,7 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         bot = self.make_bot()
         channel = RecordingChannel()
         dispatched = []
-        bot._start_command_task = lambda name, factory: dispatched.append(name)
+        bot._start_command_task = lambda name, factory, username=None: dispatched.append(name)
 
         with patch.object(bot_module.aiofiles, "open", return_value=AsyncFileStub()):
             await bot.event_message(Message("!help", channel))
@@ -150,7 +151,7 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         bot = self.make_bot()
         channel = RecordingChannel()
         dispatched = []
-        bot._start_command_task = lambda name, factory: dispatched.append(name)
+        bot._start_command_task = lambda name, factory, username=None: dispatched.append(name)
 
         with patch.object(bot_module.aiofiles, "open", return_value=AsyncFileStub()):
             for command in ("!w", "!cursor", "!click", "!doubleclick", "!torch", "!center", "!mods", "!left_click", "!right_click", "!esc"):
@@ -166,7 +167,7 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
         bot._dev_mode = True
         bot.send_movement = AsyncMock()
         pending = []
-        bot._start_command_task = lambda name, factory: pending.append((name, factory()))
+        bot._start_command_task = lambda name, factory, username=None: pending.append((name, factory()))
 
         await bot.event_message(Message("!l 25", RecordingChannel()))
         name, command = pending.pop()
@@ -178,7 +179,7 @@ class VoteDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_dev_qualifying_commands_enter_the_local_upload_log(self):
         bot = self.make_bot()
         bot._dev_mode = True
-        bot._start_command_task = lambda name, factory: None
+        bot._start_command_task = lambda name, factory, username=None: None
         channel = RecordingChannel()
 
         with patch.object(
@@ -208,6 +209,30 @@ class ConcurrentCommandTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*list(bot._active_command_tasks))
         await asyncio.sleep(0)
         self.assertEqual(bot._active_command_tasks, set())
+
+    async def test_command_task_carries_titled_viewer_into_feedback(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._active_command_tasks = set()
+        bot._progression = {
+            "profiles": {
+                "viewer": {
+                    "renown_title": "Pathfinder",
+                    "guild": {"title": "Robber"},
+                }
+            }
+        }
+        channel = RecordingChannel()
+
+        async def command():
+            await bot._send_feedback(channel, "Autowalk enabled.")
+
+        bot._start_command_task("walk", command, "viewer")
+        await asyncio.gather(*list(bot._active_command_tasks))
+
+        self.assertEqual(
+            channel.messages,
+            ["Autowalk enabled, Robber @viewer."],
+        )
 
 
 class DevModeTests(unittest.IsolatedAsyncioTestCase):
@@ -411,7 +436,48 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
         bot._movement.cancel_all.assert_called_once()
         self.assertEqual(
             channel.messages,
-            ["Autowalk toggled.", "All movement stopped."],
+            ["Autowalk enabled.", "All movement stopped."],
+        )
+
+    async def test_feedback_uses_guild_then_renown_title(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._progression = {
+            "profiles": {
+                "guilded": {
+                    "renown_title": "Pathfinder",
+                    "guild": {"title": "Robber"},
+                },
+                "renowned": {"renown_title": "Wayfarer", "guild": None},
+            }
+        }
+
+        self.assertEqual(
+            bot._feedback("Guilded", "Autowalk enabled."),
+            "Autowalk enabled, Robber @Guilded.",
+        )
+        self.assertEqual(
+            bot._feedback("Renowned", "Movement stopped!"),
+            "Movement stopped, Wayfarer @Renowned!",
+        )
+        self.assertEqual(
+            bot._feedback("NewViewer", "The torch is now on."),
+            "The torch is now on.",
+        )
+
+    async def test_feedback_removes_an_existing_leading_mention(self):
+        bot = object.__new__(bot_module.DaggerfallBot)
+        bot._progression = {
+            "profiles": {
+                "viewer": {
+                    "renown_title": "Pathfinder",
+                    "guild": {"title": "Protector"},
+                }
+            }
+        }
+
+        self.assertEqual(
+            bot._feedback("viewer", "@viewer — You already serve the Fighters Guild."),
+            "You already serve the Fighters Guild, Protector @viewer.",
         )
 
     async def test_cursor_click_and_doubleclick_send_expected_input(self):
