@@ -6,6 +6,8 @@ import requests
 import secrets
 import time
 
+from .herald import format_herald
+
 STATUS_COLL = "app.bsky.actor.status"
 STATUS_RKEY = "self"
 MAX_MINUTES = 240
@@ -147,7 +149,13 @@ def build_quest_completion_post(quest: dict) -> tuple[str, str]:
             lines.append(f"🥾 Distance traveled: {distance} km")
         except (TypeError, ValueError):
             pass
-    lines.extend(["", quest_completion_uri(quest)])
+    uri = quest_completion_uri(quest)
+    herald = format_herald(quest.get("progression_announcements"))
+    if herald:
+        remaining = POST_TEXT_LIMIT - len("\n".join(lines)) - len(uri) - 3
+        if remaining > len("📯 Herald: …"):
+            lines.append(_clamp(herald, remaining))
+    lines.extend(["", uri])
 
     alt = (
         f"Portrait of {quest_giver}, who gave The Walker the completed "

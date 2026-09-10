@@ -21,6 +21,7 @@ import math
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
+from .herald import format_herald
 from .paths import (
     CHAT_COMMANDS_FILE,
     DEV_CHAT_COMMANDS_FILE,
@@ -2554,10 +2555,11 @@ class DaggerfallBot(commands.Bot):
                 near = f" near {last_known_name}" if last_known_name else ""
                 location_part = f"🌊Ocean{near}"
             else:
-                # e.g. "🌍Daggerfall🌲Woodlands 🏰Wayrest"
+                # e.g. "🌍Daggerfall🌲Woodlands • 🏰Wayrest"
                 left = f"🌍{region}{climate_emoji}{climate}".strip()
                 right = f"{poi_emoji}{location}".strip()
-                location_part = f"{left} {right}".strip()
+                separator = " • " if poi else " "
+                location_part = f"{left}{separator}{right}".strip()
 
             # Final status line
             status = " ".join(filter(None, [
@@ -2810,19 +2812,9 @@ class DaggerfallBot(commands.Bot):
         if poi.get("monument_owner"):
             line += f" Monument raised by {poi['monument_owner']}."
         events = quest.get("progression_announcements") or []
-        if events:
-            named = events[:3]
-            notices = []
-            for event in named:
-                if event.get("type") == "unlock":
-                    notices.append(f"{event['username']} became a Wayfarer and unlocked guilds")
-                elif event.get("type") == "renown":
-                    notices.append(f"{event['username']} reached {event['title']}")
-                elif event.get("type") == "guild_rank":
-                    notices.append(f"{event['username']} became {event['title']} of the {event['guild']}")
-            if len(events) > 3:
-                notices.append(f"and {len(events) - 3} more milestones")
-            line += " 📯 Herald: " + "; ".join(notices) + "."
+        herald = format_herald(events)
+        if herald:
+            line += f" {herald}"
         return line if len(line) <= 480 else line[:477].rstrip() + "…"
 
     def _format_new_quest(self, quest):

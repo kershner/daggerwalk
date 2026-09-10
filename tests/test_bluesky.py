@@ -65,6 +65,29 @@ class QuestCompletionPostTests(unittest.TestCase):
 
         self.assertIn("⚔️ 30 XP awarded to 1 walker", text)
 
+    def test_progression_herald_is_included(self):
+        text, _ = bluesky.build_quest_completion_post({
+            "id": 42,
+            "quest_name": "Travel to Wayrest",
+            "progression_announcements": [
+                {"type": "unlock", "username": "NewWalker"},
+                {"type": "renown", "username": "PathWalker", "title": "Pathfinder"},
+                {
+                    "type": "guild_rank",
+                    "username": "GuildWalker",
+                    "title": "Protector",
+                    "guild": "Fighters Guild",
+                },
+            ],
+        })
+
+        self.assertIn(
+            "📯 Herald: NewWalker became a Wayfarer and unlocked guilds; "
+            "PathWalker reached Pathfinder; GuildWalker became Protector of the Fighters Guild.",
+            text,
+        )
+        self.assertLessEqual(len(text), bluesky.POST_TEXT_LIMIT)
+
     def test_post_uploads_portrait_and_uses_idempotent_record_key(self):
         repo = Mock()
         repo.upload_blob.return_value = types.SimpleNamespace(blob="portrait-blob")

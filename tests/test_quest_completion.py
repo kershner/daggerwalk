@@ -111,6 +111,33 @@ class QuestCompletionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Old Region", channel.messages[0])
         self.assertNotIn("STALE", channel.messages[0])
 
+    async def test_info_separates_wilderness_type_from_poi_name(self):
+        channel = RecordingChannel()
+        bot = make_bot(channel)
+        bot.state = {"bluesky_live_text": ""}
+        bot._music_tracks = []
+        bot._track_map = {}
+        bot._latest_response_data = {
+            "log": {
+                "region": "Daggerfall",
+                "location": "Wayrest",
+                "weather": "Clear",
+                "season": "Summer",
+                "current_song": "",
+                "date": "Tirdas, 12 Sun's Height, 3E 405, 18:30:00",
+                "region_fk": {"climate": "Woodlands", "emoji": "🌲"},
+                "poi": {"name": "Wayrest", "emoji": "🏰"},
+            }
+        }
+        bot._latest_response_at = datetime.now(timezone.utc)
+        bot.refresh_now = AsyncMock(return_value=True)
+
+        await bot.game_info()
+
+        bot.refresh_now.assert_not_awaited()
+        self.assertEqual(len(channel.messages), 1)
+        self.assertIn("🌲Woodlands • 🏰Wayrest", channel.messages[0])
+
     async def test_local_quest_arrival_triggers_one_immediate_refresh(self):
         bot = make_bot()
         bot._latest_response_data = {
