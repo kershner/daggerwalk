@@ -224,14 +224,14 @@ class ConcurrentCommandTests(unittest.IsolatedAsyncioTestCase):
         channel = RecordingChannel()
 
         async def command():
-            await bot._send_feedback(channel, "Autowalk enabled.")
+            await bot._send_feedback(channel, "Autowalk toggled.")
 
         bot._start_command_task("walk", command, "viewer")
         await asyncio.gather(*list(bot._active_command_tasks))
 
         self.assertEqual(
             channel.messages,
-            ["Autowalk enabled, Robber @viewer."],
+            ["Autowalk toggled, Robber @viewer."],
         )
 
 
@@ -436,7 +436,7 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
         bot._movement.cancel_all.assert_called_once()
         self.assertEqual(
             channel.messages,
-            ["Autowalk enabled.", "All movement stopped."],
+            ["Autowalk toggled.", "All movement stopped."],
         )
 
     async def test_feedback_uses_guild_then_renown_title(self):
@@ -452,8 +452,8 @@ class MovementFeedbackTests(unittest.IsolatedAsyncioTestCase):
         }
 
         self.assertEqual(
-            bot._feedback("Guilded", "Autowalk enabled."),
-            "Autowalk enabled, Robber @Guilded.",
+            bot._feedback("Guilded", "Autowalk toggled."),
+            "Autowalk toggled, Robber @Guilded.",
         )
         self.assertEqual(
             bot._feedback("Renowned", "Movement stopped!"),

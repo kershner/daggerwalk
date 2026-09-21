@@ -1822,7 +1822,7 @@ class DaggerfallBot(commands.Bot):
         self._autowalk_active = True
         self._last_world_movement_at = time.monotonic()
         await self.send_movement(GameKeys.WALK)
-        await self._send_feedback(channel, "Autowalk enabled.")
+        await self._send_feedback(channel, "Autowalk toggled.")
 
     async def stop_movement(self, channel):
         """Cancel pending/held movement immediately and stop the autowalk mod."""
