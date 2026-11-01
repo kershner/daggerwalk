@@ -298,13 +298,15 @@ def send_game_input(key: str, repeat: int = 1, delay: float = 0.2):
     try:
         dialog = get_game_dialog()
         if dialog is None:
-            return
+            return False
         logging.info(f"Sending input: {key} ({repeat} times)")
         for _ in range(repeat):
             dialog.send_keystrokes(key)
             time.sleep(delay)
+        return True
     except Exception as e:
         logging.error(f"Input error: {e}")
+        return False
 
 
 def focus_game_window() -> bool:
@@ -2092,25 +2094,20 @@ class DaggerfallBot(commands.Bot):
         self._update_state("camera_mode", new_mode)
 
     async def _apply_torch(self, phase=None):
-        """Toggle manually, or apply a day/night phase once, under the UI lock."""
+        """Toggle manually, or handle a day/night transition once."""
         async with self._game_ui():
-            enabled = bool(self.state.get("torch", False))
-            if phase is None:
-                enabled = not enabled
-            elif phase != getattr(self, "_auto_torch_phase", None):
-                enabled = phase == "night"
-            elif getattr(self, "_torch_synchronized", False):
+            if phase is not None and phase == getattr(self, "_auto_torch_phase", None):
                 return False
-            # Same phase after restart: restore the saved manual choice.
-            command = "brightlight on" if enabled else "brightlight off"
-            if not await asyncio.to_thread(self._send_console_command_sync, command):
-                return False
-            self._update_state("torch", enabled)
+            current = bool(self.state.get("torch", False))
+            enabled = not current if phase is None else phase == "night"
+            if enabled != current:
+                if not await asyncio.to_thread(send_game_input, ";"):
+                    return False
+                self._update_state("torch", enabled)
             if phase is not None:
                 self._auto_torch_phase = phase
-            self._torch_synchronized = True
             self._save_torch_state()
-            return True
+            return enabled != current
 
     async def toggle_torch(self):
         """Apply a manual choice until the next day/night transition."""
