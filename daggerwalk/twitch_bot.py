@@ -981,6 +981,9 @@ class DaggerfallBot(commands.Bot):
         try:
             with open(Config.LOCAL_STATE_FILE, "r", encoding="utf-8") as state_file:
                 saved_state = json.load(state_file)
+            self._auto_torch_phase = (
+                saved_state.get("auto_torch_phase") if isinstance(saved_state, dict) else None
+            )
             return bool(saved_state.get("torch", False)) if isinstance(saved_state, dict) else False
         except FileNotFoundError:
             return False
@@ -993,7 +996,10 @@ class DaggerfallBot(commands.Bot):
         state_path = Config.LOCAL_STATE_FILE
         try:
             with open(f"{state_path}.tmp", "w", encoding="utf-8") as state_file:
-                json.dump({"torch": bool(self.state.get("torch", False))}, state_file)
+                json.dump({
+                    "torch": bool(self.state.get("torch", False)),
+                    "auto_torch_phase": getattr(self, "_auto_torch_phase", None),
+                }, state_file)
             os.replace(f"{state_path}.tmp", state_path)
         except Exception as e:
             logging.error(f"Could not save torch state: {e}")
@@ -1094,8 +1100,7 @@ class DaggerfallBot(commands.Bot):
                     last_song = new_song_name
                     logging.info(f"Detected new song: {song_display}")
 
-                await self._maybe_turn_off_torch_at_morning(data)
-                await self._maybe_turn_on_torch_at_night(data)
+                await self._update_auto_torch(data)
                 await self._maybe_update_stream_title(data)
                 await self._maybe_submit_quest_arrival(data)
 
@@ -2086,63 +2091,39 @@ class DaggerfallBot(commands.Bot):
         new_mode = "third" if current == "first" else "first"
         self._update_state("camera_mode", new_mode)
 
+    async def _apply_torch(self, phase=None):
+        """Toggle manually, or apply a day/night phase once, under the UI lock."""
+        async with self._game_ui():
+            enabled = bool(self.state.get("torch", False))
+            if phase is None:
+                enabled = not enabled
+            elif phase != getattr(self, "_auto_torch_phase", None):
+                enabled = phase == "night"
+            elif getattr(self, "_torch_synchronized", False):
+                return False
+            # Same phase after restart: restore the saved manual choice.
+            command = "brightlight on" if enabled else "brightlight off"
+            if not await asyncio.to_thread(self._send_console_command_sync, command):
+                return False
+            self._update_state("torch", enabled)
+            if phase is not None:
+                self._auto_torch_phase = phase
+            self._torch_synchronized = True
+            self._save_torch_state()
+            return True
+
     async def toggle_torch(self):
-        """Press BrightLight's toggle key and keep bot state synchronized."""
-        async with self._game_ui():
-            new_state = not bool(self.state.get("torch", False))
-            await asyncio.to_thread(send_game_input, ";")
-            self._update_state("torch", new_state)
-            self._save_torch_state()
+        """Apply a manual choice until the next day/night transition."""
+        await self._apply_torch()
 
-    async def _maybe_turn_off_torch_at_morning(self, data):
-        """Turn off an enabled torch during the game's morning hours."""
-        if not self.state.get("torch", False):
-            return False
-
+    async def _update_auto_torch(self, data):
+        """Apply one automatic choice per day/night phase, preserving manual choices."""
         _, _, time_str, _, _ = self._local_live_fields(data)
         try:
             hour = datetime.strptime(time_str, "%H:%M:%S").hour
         except ValueError:
             return False
-
-        if not 6 <= hour < 12:
-            return False
-
-        async with self._game_ui():
-            # A chat command may have changed the torch while we waited for the UI.
-            if not self.state.get("torch", False):
-                return False
-            await asyncio.to_thread(send_game_input, ";")
-            self._update_state("torch", False)
-            self._save_torch_state()
-
-        logging.info("Torch automatically turned off for morning")
-        return True
-
-    async def _maybe_turn_on_torch_at_night(self, data):
-        """Turn on a disabled torch between 18:00 and 06:00 game time."""
-        if self.state.get("torch", False):
-            return False
-
-        _, _, time_str, _, _ = self._local_live_fields(data)
-        try:
-            hour = datetime.strptime(time_str, "%H:%M:%S").hour
-        except ValueError:
-            return False
-
-        if 6 <= hour < 18:
-            return False
-
-        async with self._game_ui():
-            # A chat command may have changed the torch while we waited for the UI.
-            if self.state.get("torch", False):
-                return False
-            await asyncio.to_thread(send_game_input, ";")
-            self._update_state("torch", True)
-            self._save_torch_state()
-
-        logging.info("Torch automatically turned on for night")
-        return True
+        return await self._apply_torch("day" if 6 <= hour < 18 else "night")
 
     async def bighop(self):
         """Shortcut for common pattern to get unstuck"""
@@ -2320,7 +2301,7 @@ class DaggerfallBot(commands.Bot):
         try:
             dialog = get_game_dialog()
             if dialog is None:
-                return
+                return False
 
             dialog.send_keystrokes(GameKeys.CONSOLE.value)
             time.sleep(0.5)
@@ -2329,8 +2310,10 @@ class DaggerfallBot(commands.Bot):
             dialog.send_keystrokes("{ENTER}")
             time.sleep(1)
             dialog.send_keystrokes(GameKeys.CONSOLE.value)
+            return True
         except Exception as e:
             logging.error(f"Error sending console command: {e}")
+            return False
     
     @staticmethod
     async def load_json_async(file_path):
