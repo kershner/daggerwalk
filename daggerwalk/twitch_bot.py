@@ -24,6 +24,7 @@ from contextvars import ContextVar
 from urllib.parse import urlparse
 
 from .herald import format_herald
+from .cinematic import get_cinematic_status, set_cinematic_enabled
 from .paths import (
     CHAT_COMMANDS_FILE,
     DEV_CHAT_COMMANDS_FILE,
@@ -113,7 +114,7 @@ class Config:
     }
     HELP_COMMANDS = (
         "walk", "stop", "jump", "left", "right", "up", "down", "center",
-        "forward", "back", "cursor", "click", "doubleclick", "map", "song", "state", "more",
+        "forward", "back", "cursor", "click", "doubleclick", "map", "song", "cinematic", "state", "more",
     )
     MORE_COMMANDS = (
         "info", "quest", "use", "weather", "levitate", "toggle_ai", "exit",
@@ -136,7 +137,7 @@ class Config:
         "doubleclick": "Double-click the left mouse button • Usage: !doubleclick",
         "map": "Briefly show the world map • Usage: !map",
         "song": "Start a vote to change the music • Usage: !song <number|random|category>",
-        "state": "Show the bot's current local settings • Usage: !state",
+        "state": "Show the bot's current settings and live cinematic mode • Usage: !state",
         "help": "List commands or show details for one command • Usage: !help [command]",
         "more": "List additional commands • Usage: !more",
         "info": "Show current journey and character information • Usage: !info",
@@ -154,6 +155,7 @@ class Config:
         "modlist": "View active mods on the Daggerwalk website • Usage: !modlist",
         "shotgun": "Raise, fire, and lower the equipped shotgun • Usage: !shotgun",
         "camera": "Start a vote to toggle the third-person camera • Usage: !camera",
+        "cinematic": "Start a vote to toggle the cinematic camera • Usage: !cinematic <on|off>",
         "torch": "Toggle the player torch light • Usage: !torch",
         "killall": "Kill all nearby enemies • Usage: !killall",
         "bighop": "Run the extended unstuck movement sequence • Usage: !bighop",
@@ -185,7 +187,7 @@ class Config:
         "walk", "stop", "jump", "left", "right", "up", "down", "center",
         "forward", "back", "cursor", "click", "doubleclick", "map", "song",
         "use", "weather", "levitate", "toggle_ai", "exit", "gravity", "playvid",
-        "shotgun", "camera", "torch", "killall", "bighop",
+        "shotgun", "camera", "cinematic", "torch", "killall", "bighop",
     }
 
     @classmethod
@@ -556,7 +558,8 @@ class DaggerfallBot(commands.Bot):
             "exit": "teleport out of the current building",
             "gravity": "set gravity level",
             "playvid": "play an in-game video",
-            "camera": "toggle third-person camera"
+            "camera": "toggle third-person camera",
+            "cinematic": "change cinematic mode",
         }
         
         # Bluesky client initialization
@@ -1267,6 +1270,19 @@ class DaggerfallBot(commands.Bot):
         command = Config.COMMAND_ALIASES.get(command, command)
         args = parts[1:] if len(parts) > 1 else []
 
+        if command == "cinematic":
+            if not args:
+                status = await asyncio.to_thread(get_cinematic_status)
+                label = "Unavailable" if status is None else ("On" if status else "Off")
+                await self._send_feedback(message.channel,
+                    f"Cinematic mode: {label}. Usage: !cinematic [on/off]. Examples: !cinematic on • !cinematic off",
+                    message.author.name)
+                return
+            valid, usage = self.validate_cinematic_args(args)
+            if not valid:
+                await self._send_feedback(message.channel, usage, message.author.name)
+                return
+
         if not getattr(self, "_runtime_ready", True):
             await self._send_feedback(
                 message.channel,
@@ -1355,6 +1371,7 @@ class DaggerfallBot(commands.Bot):
             "levitate": self.validate_levitate_args,
             "gravity": self.validate_gravity_args,
             "playvid": self.validate_playvid_args,
+            "cinematic": self.validate_cinematic_args,
         }
         validator = validators.get(command)
         return validator(args)[0] if validator else True
@@ -1902,6 +1919,12 @@ class DaggerfallBot(commands.Bot):
             return True, None
         return False, "Usage: !playvid <0–15>"
 
+    @staticmethod
+    def validate_cinematic_args(args):
+        if len(args) == 1 and args[0].lower() in {"on", "off"}:
+            return True, None
+        return False, "Usage: !cinematic [on/off]. Examples: !cinematic on • !cinematic off"
+
     async def start_vote(self, message, vote_type):
         if self.voting_active:
             await self._send_feedback(
@@ -1956,6 +1979,14 @@ class DaggerfallBot(commands.Bot):
             if not ok:
                 await self._send_feedback(message.channel, msg, message.author.name)
                 return
+
+        if vote_type == "cinematic":
+            args = message.content.split()[1:]
+            valid, usage = self.validate_cinematic_args(args)
+            if not valid:
+                await self._send_feedback(message.channel, usage, message.author.name)
+                return
+            self.votable_commands["cinematic"] = f"turn cinematic mode {args[0].lower()}"
 
         logging.info(f"Starting vote for {vote_type}")
         self.voting_active = True
@@ -2056,6 +2087,19 @@ class DaggerfallBot(commands.Bot):
             await self.playvid(args[0])
         elif self.current_vote_type == "camera":
             await self.toggle_camera()
+        elif self.current_vote_type == "cinematic":
+            await self.cinematic(self.current_vote_message.content.split()[1].lower())
+
+    async def cinematic(self, action):
+        if not hasattr(self, "_cinematic_lock"):
+            self._cinematic_lock = asyncio.Lock()
+        async with self._cinematic_lock:
+            try:
+                await set_cinematic_enabled(action == "on")
+            except RuntimeError as error:
+                await self._send_feedback(self.connected_channels[0], str(error))
+                return
+            await self._send_feedback(self.connected_channels[0], f"Cinematic mode: {action.capitalize()}.")
 
     async def toggle_map(self):
         """Toggle game map view with special handling for Ocean regions"""
@@ -2951,6 +2995,9 @@ class DaggerfallBot(commands.Bot):
                 parts.append(f"AI: {'on' if s['ai_enabled'] else 'off'}")
             if s.get("camera_mode"):
                 parts.append(f"Camera: {s['camera_mode']}")
+            cinematic = await asyncio.to_thread(get_cinematic_status)
+            cinematic_label = "unavailable" if cinematic is None else ("on" if cinematic else "off")
+            parts.append(f"Cinematic: {cinematic_label}")
             torch_str = "on" if s.get("torch", False) else "off"
             parts.append(f"Torch: {torch_str}")
             if s.get("next_log_time"):
