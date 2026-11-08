@@ -400,6 +400,14 @@ public sealed class CinematicCamera : MonoBehaviour
     private readonly DaggerwalkCameraDirector director = new DaggerwalkCameraDirector(Environment.TickCount);
     private readonly RaycastHit[] hits = new RaycastHit[64];
     private readonly DaggerwalkEyeBillboard eyeBillboard = new DaggerwalkEyeBillboard();
+    private readonly List<Light> cameraLights = new List<Light>();
+    private readonly List<CameraLightPose> cameraLightPoses = new List<CameraLightPose>();
+    private struct CameraLightPose
+    {
+        public Transform transform, parent;
+        public Vector3 localPosition, worldPosition;
+        public Quaternion localRotation, worldRotation;
+    }
     private bool requested, ready;
     private Camera mainCamera, overlaidCamera, renderPassCamera;
     private Transform originalParent;
@@ -440,7 +448,7 @@ public sealed class CinematicCamera : MonoBehaviour
     private void Awake()
     {
         settings.Normalize();
-        Debug.Log("[CinematicCamera v1.4.0] Script loaded. Numpad 1 toggle; Numpad 2 next shot. Settings: in-game Mod Options > Cinematic Camera.");
+        Debug.Log("[CinematicCamera v1.4.1] Script loaded. Numpad 1 toggle; Numpad 2 next shot. Settings: in-game Mod Options > Cinematic Camera.");
     }
 
     public static double ControlTimestamp()
@@ -688,7 +696,25 @@ public sealed class CinematicCamera : MonoBehaviour
         overlayFrame = Time.frameCount;
         writtenPosition = position;
         writtenRotation = rotation;
+        // BrightLight and DFU's held light are camera children. Preserve their
+        // gameplay poses before moving the camera so illumination stays with
+        // the player, including nested lights and directional spotlights.
+        cameraLights.Clear();
+        cameraLightPoses.Clear();
+        mainCamera.GetComponentsInChildren<Light>(true, cameraLights);
+        foreach (Light light in cameraLights)
+        {
+            Transform lightTransform = light.transform;
+            if (lightTransform == transform) continue;
+            cameraLightPoses.Add(new CameraLightPose {
+                transform = lightTransform, parent = lightTransform.parent,
+                localPosition = lightTransform.localPosition, localRotation = lightTransform.localRotation,
+                worldPosition = lightTransform.position, worldRotation = lightTransform.rotation
+            });
+        }
         transform.SetPositionAndRotation(position, rotation);
+        foreach (CameraLightPose pose in cameraLightPoses)
+            pose.transform.SetPositionAndRotation(pose.worldPosition, pose.worldRotation);
         if (camera == mainCamera)
             eyeBillboard.Apply(position, transform.forward, GameManager.Instance.PlayerMotor.transform.forward);
     }
@@ -712,6 +738,14 @@ public sealed class CinematicCamera : MonoBehaviour
                 transform.localRotation = originalLocalRotation;
             }
         }
+        foreach (CameraLightPose pose in cameraLightPoses)
+        {
+            if (pose.transform == null || pose.transform.parent != pose.parent) continue;
+            pose.transform.localPosition = pose.localPosition;
+            pose.transform.localRotation = pose.localRotation;
+        }
+        cameraLightPoses.Clear();
+        cameraLights.Clear();
         overlaidCamera = null;
         renderPassCamera = null;
     }
